@@ -583,3 +583,186 @@ def test_get_sos_history_unauthorized_member_forbidden(client, auth_headers, tes
     app.dependency_overrides.clear()
 
     assert response.status_code == 403
+
+
+def test_trigger_sos_with_full_location_fields(client, auth_headers, test_user_id):
+    """Test triggering SOS with explicitly supplied valid location: lat, lon, accuracy, timestamp."""
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "emergency_contacts": [],
+        "sos_events": [],
+        "notifications": []
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "family_member_id": family_member_id,
+        "latitude": 37.7749,
+        "longitude": -122.4194,
+        "accuracy": 12.5,
+        "timestamp": "2026-10-06T02:00:00Z",
+        "notes": "Fall detection with GPS fix"
+    }
+
+    response = client.post("/emergency/sos", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["latitude"] == 37.7749
+    assert data["longitude"] == -122.4194
+    assert data["accuracy"] == 12.5
+    assert data["location_accuracy"] == 12.5
+    assert data["timestamp"] is not None
+    assert data["notes"] == "Fall detection with GPS fix"
+
+
+def test_trigger_sos_without_location_succeeds(client, auth_headers, test_user_id):
+    """Verify that location is completely optional and omitting it succeeds without error."""
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "emergency_contacts": [],
+        "sos_events": [],
+        "notifications": []
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "family_member_id": family_member_id,
+        "notes": "Panic button pressed without GPS"
+    }
+
+    response = client.post("/emergency/sos", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["latitude"] is None
+    assert data["longitude"] is None
+    assert data["accuracy"] is None
+    assert data["notes"] == "Panic button pressed without GPS"
+
+
+def test_trigger_sos_partial_coordinates_rejected(client, auth_headers, test_user_id):
+    """Reject SOS request when only one coordinate is provided (latitude without longitude or vice versa)."""
+    family_member_id = str(uuid.uuid4())
+
+    # Only latitude provided
+    payload_only_lat = {
+        "family_member_id": family_member_id,
+        "latitude": 40.7128
+    }
+    response_lat = client.post("/emergency/sos", json=payload_only_lat, headers=auth_headers)
+    assert response_lat.status_code == 422
+
+    # Only longitude provided
+    payload_only_lon = {
+        "family_member_id": family_member_id,
+        "longitude": -74.0060
+    }
+    response_lon = client.post("/emergency/sos", json=payload_only_lon, headers=auth_headers)
+    assert response_lon.status_code == 422
+
+
+def test_trigger_sos_negative_accuracy_rejected(client, auth_headers, test_user_id):
+    """Reject negative location accuracy."""
+    family_member_id = str(uuid.uuid4())
+
+    payload = {
+        "family_member_id": family_member_id,
+        "latitude": 40.7128,
+        "longitude": -74.0060,
+        "accuracy": -10.0
+    }
+    response = client.post("/emergency/sos", json=payload, headers=auth_headers)
+    assert response.status_code == 422
+
+
+def test_trigger_sos_coordinate_bounds_rejected(client, auth_headers, test_user_id):
+    """Reject coordinates exceeding valid geographical bounds."""
+    family_member_id = str(uuid.uuid4())
+
+    # Latitude > 90
+    res1 = client.post(
+        "/emergency/sos",
+        json={"family_member_id": family_member_id, "latitude": 90.1, "longitude": 0.0},
+        headers=auth_headers
+    )
+    assert res1.status_code == 422
+
+    # Latitude < -90
+    res2 = client.post(
+        "/emergency/sos",
+        json={"family_member_id": family_member_id, "latitude": -90.1, "longitude": 0.0},
+        headers=auth_headers
+    )
+    assert res2.status_code == 422
+
+    # Longitude > 180
+    res3 = client.post(
+        "/emergency/sos",
+        json={"family_member_id": family_member_id, "latitude": 0.0, "longitude": 180.1},
+        headers=auth_headers
+    )
+    assert res3.status_code == 422
+
+    # Longitude < -180
+    res4 = client.post(
+        "/emergency/sos",
+        json={"family_member_id": family_member_id, "latitude": 0.0, "longitude": -180.1},
+        headers=auth_headers
+    )
+    assert res4.status_code == 422
+
+
+def test_location_data_protected_by_sos_authorization(client, auth_headers, test_user_id):
+    """Ensure location coordinates in an SOS event are shielded from unauthorized users."""
+    event_id = str(uuid.uuid4())
+    other_patient_id = str(uuid.uuid4())
+    other_family_id = str(uuid.uuid4())
+    other_member_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": other_member_id,
+            "family_id": other_family_id,
+            "user_id": other_patient_id,
+            "role": "MEMBER"
+        }],
+        "sos_events": [{
+            "id": event_id,
+            "family_member_id": other_member_id,
+            "triggered_by": other_patient_id,
+            "status": "TRIGGERED",
+            "latitude": 51.5074,
+            "longitude": -0.1278,
+            "accuracy": 5.0,
+            "triggered_at": "2026-10-06T02:00:00Z"
+        }]
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+    # Caller does not belong to other_family_id
+    response = client.get(f"/emergency/sos/{event_id}", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert "Access forbidden" in response.json()["detail"]

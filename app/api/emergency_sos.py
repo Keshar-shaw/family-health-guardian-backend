@@ -80,16 +80,22 @@ def trigger_sos_event(
         user_id=current_user.sub
     )
 
+    acc_val = sos_in.accuracy if sos_in.accuracy is not None else sos_in.location_accuracy
+    ts_val = sos_in.timestamp or sos_in.location_timestamp
+
     sos_dict = {
         "family_member_id": str(sos_in.family_member_id),
         "triggered_by": current_user.sub,
         "status": SOSEventStatus.TRIGGERED.value,
         "latitude": sos_in.latitude,
         "longitude": sos_in.longitude,
-        "location_accuracy": sos_in.location_accuracy,
+        "accuracy": acc_val,
+        "location_accuracy": acc_val,
         "notes": sos_in.notes,
         "triggered_at": datetime.now(timezone.utc).isoformat(),
     }
+    if ts_val:
+        sos_dict["location_timestamp"] = ts_val.isoformat()
 
     res = supabase.table("sos_events").insert(sos_dict).execute()
     if not res.data:
