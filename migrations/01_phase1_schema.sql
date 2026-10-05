@@ -92,17 +92,47 @@ ALTER TABLE public.families ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.family_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.consents ENABLE ROW LEVEL SECURITY;
 
+-- Security Definer Helper Functions to avoid RLS Infinite Recursion
+CREATE OR REPLACE FUNCTION public.is_family_member(_family_id UUID, _user_id UUID DEFAULT auth.uid())
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1
+        FROM public.family_members
+        WHERE family_id = _family_id AND user_id = _user_id
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE OR REPLACE FUNCTION public.is_family_admin(_family_id UUID, _user_id UUID DEFAULT auth.uid())
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1
+        FROM public.family_members
+        WHERE family_id = _family_id AND user_id = _user_id AND role = 'ADMIN'
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+CREATE OR REPLACE FUNCTION public.are_in_same_family(_user_id1 UUID, _user_id2 UUID)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1
+        FROM public.family_members fm1
+        JOIN public.family_members fm2 ON fm1.family_id = fm2.family_id
+        WHERE fm1.user_id = _user_id1 AND fm2.user_id = _user_id2
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
 -- RLS POLICIES FOR PROFILES
 DROP POLICY IF EXISTS "Users can view self or family member profiles" ON public.profiles;
 CREATE POLICY "Users can view self or family member profiles"
 ON public.profiles FOR SELECT
 USING (
-    auth.uid() = id OR
-    EXISTS (
-        SELECT 1 FROM public.family_members fm1
-        JOIN public.family_members fm2 ON fm1.family_id = fm2.family_id
-        WHERE fm1.user_id = auth.uid() AND fm2.user_id = profiles.id
-    )
+    auth.uid() = id OR public.are_in_same_family(auth.uid(), id)
 );
 
 DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
@@ -115,10 +145,7 @@ DROP POLICY IF EXISTS "Users can view families they belong to" ON public.familie
 CREATE POLICY "Users can view families they belong to"
 ON public.families FOR SELECT
 USING (
-    EXISTS (
-        SELECT 1 FROM public.family_members
-        WHERE family_members.family_id = families.id AND family_members.user_id = auth.uid()
-    )
+    public.is_family_member(id, auth.uid())
 );
 
 DROP POLICY IF EXISTS "Users can create families" ON public.families;
@@ -130,12 +157,7 @@ DROP POLICY IF EXISTS "Family admins can update family info" ON public.families;
 CREATE POLICY "Family admins can update family info"
 ON public.families FOR UPDATE
 USING (
-    EXISTS (
-        SELECT 1 FROM public.family_members
-        WHERE family_members.family_id = families.id 
-          AND family_members.user_id = auth.uid() 
-          AND family_members.role = 'ADMIN'
-    )
+    public.is_family_admin(id, auth.uid())
 );
 
 -- RLS POLICIES FOR FAMILY MEMBERS
@@ -143,34 +165,21 @@ DROP POLICY IF EXISTS "Members can view members in their family" ON public.famil
 CREATE POLICY "Members can view members in their family"
 ON public.family_members FOR SELECT
 USING (
-    EXISTS (
-        SELECT 1 FROM public.family_members self_fm
-        WHERE self_fm.family_id = family_members.family_id AND self_fm.user_id = auth.uid()
-    )
+    public.is_family_member(family_id, auth.uid())
 );
 
 DROP POLICY IF EXISTS "Admins can insert family members" ON public.family_members;
 CREATE POLICY "Admins can insert family members"
 ON public.family_members FOR INSERT
 WITH CHECK (
-    EXISTS (
-        SELECT 1 FROM public.family_members self_fm
-        WHERE self_fm.family_id = family_members.family_id 
-          AND self_fm.user_id = auth.uid() 
-          AND self_fm.role = 'ADMIN'
-    ) OR auth.uid() = user_id
+    public.is_family_admin(family_id, auth.uid()) OR auth.uid() = user_id
 );
 
 DROP POLICY IF EXISTS "Admins can delete family members" ON public.family_members;
 CREATE POLICY "Admins can delete family members"
 ON public.family_members FOR DELETE
 USING (
-    EXISTS (
-        SELECT 1 FROM public.family_members self_fm
-        WHERE self_fm.family_id = family_members.family_id 
-          AND self_fm.user_id = auth.uid() 
-          AND self_fm.role = 'ADMIN'
-    ) OR auth.uid() = user_id
+    public.is_family_admin(family_id, auth.uid()) OR auth.uid() = user_id
 );
 
 -- RLS POLICIES FOR CONSENTS
