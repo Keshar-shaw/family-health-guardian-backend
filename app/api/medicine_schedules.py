@@ -45,7 +45,7 @@ def create_medicine_schedule(
     Create a new intake schedule for a medicine.
     Requires caller to be the family member or have ACTIVE FULL_ACCESS consent.
     """
-    get_medicine_and_verify_access(
+    medicine = get_medicine_and_verify_access(
         supabase=supabase,
         medicine_id=schedule_in.medicine_id,
         user_id=current_user.sub,
@@ -62,7 +62,24 @@ def create_medicine_schedule(
     res = supabase.table("medicine_schedules").insert(sched_dict).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to create medicine schedule")
-    return res.data[0]
+    created_schedule = res.data[0]
+
+    # Create reminder notification if enabled
+    if created_schedule.get("reminder_enabled"):
+        try:
+            from app.services.notifications import NotificationService
+            NotificationService.create_medicine_reminder_notification(
+                supabase=supabase,
+                medicine_id=schedule_in.medicine_id,
+                family_member_id=UUID(medicine["family_member_id"]),
+                scheduled_time=created_schedule["scheduled_time"],
+                medicine_name=medicine.get("medicine_name", "Medicine"),
+                dosage=medicine.get("dosage")
+            )
+        except Exception:
+            pass
+
+    return created_schedule
 
 
 @router.get("", response_model=List[MedicineScheduleResponse])

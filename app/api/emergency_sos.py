@@ -106,6 +106,19 @@ def trigger_sos_event(
 
     created_event["notification_dispatched"] = True
     created_event["emergency_contacts_count"] = contact_count
+
+    # Dispatch emergency notifications via NotificationService
+    try:
+        from app.services.notifications import NotificationService
+        NotificationService.send_sos_notifications(
+            supabase=supabase,
+            sos_event=created_event,
+            family_member_id=sos_in.family_member_id,
+            triggerer_user_id=current_user.sub
+        )
+    except Exception:
+        pass
+
     return created_event
 
 
