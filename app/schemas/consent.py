@@ -25,7 +25,7 @@ class ConsentCreate(BaseModel):
 
 
 class ConsentUpdate(BaseModel):
-    status: ConsentStatus
+    status: Optional[ConsentStatus] = None
     permission_level: Optional[ConsentPermission] = None
     notes: Optional[str] = None
 

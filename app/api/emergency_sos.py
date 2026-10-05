@@ -18,13 +18,20 @@ router = APIRouter(prefix="/emergency/sos", tags=["Emergency SOS"])
 def verify_sos_member_access(
     supabase: Client,
     family_member_id: UUID,
-    user_id: str
+    user_id: str,
+    allow_triggerer: Optional[str] = None
 ) -> dict:
     """
     Validates family member existence and verifies the requesting user is either:
-    1. The member themselves (self)
-    2. A member of the same family
+    1. The triggerer of this specific event
+    2. The member themselves (self)
+    3. A member of the same family
     """
+    if allow_triggerer and allow_triggerer == user_id:
+        member_res = supabase.table("family_members").select("*").eq("id", str(family_member_id)).execute()
+        if member_res.data:
+            return member_res.data[0]
+
     member_res = supabase.table("family_members").select("*").eq("id", str(family_member_id)).execute()
     if not member_res.data:
         raise HTTPException(
@@ -168,7 +175,8 @@ def get_sos_event(
     verify_sos_member_access(
         supabase=supabase,
         family_member_id=UUID(event["family_member_id"]),
-        user_id=current_user.sub
+        user_id=current_user.sub,
+        allow_triggerer=event.get("triggered_by")
     )
     return event
 
@@ -182,7 +190,7 @@ def update_sos_event_status(
 ):
     """
     Update the status of an active SOS event (ACKNOWLEDGED, RESOLVED, CANCELLED).
-    Caller must be a member of the patient's family.
+    Caller must be a member of the patient's family or the alert triggerer.
     """
     res = supabase.table("sos_events").select("*").eq("id", str(id)).execute()
     if not res.data:
@@ -192,7 +200,8 @@ def update_sos_event_status(
     verify_sos_member_access(
         supabase=supabase,
         family_member_id=UUID(event["family_member_id"]),
-        user_id=current_user.sub
+        user_id=current_user.sub,
+        allow_triggerer=event.get("triggered_by")
     )
 
     update_dict = {"status": status_update.status.value}

@@ -67,6 +67,14 @@ def get_family_details(
     supabase: Client = Depends(get_supabase)
 ):
     """Get details and members of a specific family."""
+    # Backend authorization: verify caller is a member of this family
+    member_check = supabase.table("family_members").select("id") \
+        .eq("family_id", str(family_id)) \
+        .eq("user_id", current_user.sub) \
+        .execute()
+    if not member_check.data:
+        raise HTTPException(status_code=403, detail="Access denied: you are not a member of this family")
+
     fam_res = supabase.table("families").select("*").eq("id", str(family_id)).execute()
     if not fam_res.data:
         raise HTTPException(status_code=404, detail="Family not found or access denied")

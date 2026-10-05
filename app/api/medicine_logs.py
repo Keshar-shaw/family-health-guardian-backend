@@ -33,6 +33,14 @@ def create_medicine_log(
     med = med_res.data[0]
 
     family_member_id = UUID(med["family_member_id"])
+
+    # Security check: never trust client-supplied family_member_id without verifying match
+    if log_in.family_member_id is not None and str(log_in.family_member_id) != str(family_member_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Supplied family_member_id does not match the medicine's family member"
+        )
+
     verify_medicine_access(
         supabase=supabase,
         family_member_id=family_member_id,
@@ -45,6 +53,11 @@ def create_medicine_log(
         sched_res = supabase.table("medicine_schedules").select("*").eq("id", str(log_in.schedule_id)).execute()
         if not sched_res.data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medicine schedule not found")
+        if sched_res.data[0].get("medicine_id") != str(log_in.medicine_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Schedule does not belong to the specified medicine"
+            )
 
     log_dict = {
         "medicine_id": str(log_in.medicine_id),
