@@ -8,6 +8,7 @@ from app.api.medicines import router as medicines_router
 from app.api.medicine_schedules import router as medicine_schedules_router
 from app.api.medicine_logs import router as medicine_logs_router
 from app.api.emergency_contacts import router as emergency_contacts_router
+from app.api.emergency_sos import router as emergency_sos_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -19,3 +20,4 @@ api_router.include_router(medicines_router)
 api_router.include_router(medicine_schedules_router)
 api_router.include_router(medicine_logs_router)
 api_router.include_router(emergency_contacts_router)
+api_router.include_router(emergency_sos_router)

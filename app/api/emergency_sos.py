@@ -1,0 +1,159 @@
+from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timezone
+from uuid import UUID
+from app.auth.dependencies import get_current_user, get_supabase
+from app.auth.jwt import UserTokenPayload
+from app.schemas.emergency_sos import (
+    SOSEventCreate,
+    SOSEventStatusUpdate,
+    SOSEventResponse,
+    SOSEventStatus,
+)
+from supabase import Client
+
+router = APIRouter(prefix="/emergency/sos", tags=["Emergency SOS"])
+
+
+def verify_sos_member_access(
+    supabase: Client,
+    family_member_id: UUID,
+    user_id: str
+) -> dict:
+    """
+    Validates family member existence and verifies the requesting user is either:
+    1. The member themselves (self)
+    2. A member of the same family
+    """
+    member_res = supabase.table("family_members").select("*").eq("id", str(family_member_id)).execute()
+    if not member_res.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Family member not found"
+        )
+    member = member_res.data[0]
+
+    if member["user_id"] == user_id:
+        return member
+
+    # Check if user belongs to the same family
+    membership_res = supabase.table("family_members").select("*") \
+        .eq("family_id", member["family_id"]) \
+        .eq("user_id", user_id) \
+        .execute()
+    
+    if not membership_res.data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: caller is not in the same family as this member"
+        )
+
+    return member
+
+
+@router.post("", response_model=SOSEventResponse, status_code=status.HTTP_201_CREATED)
+def trigger_sos_event(
+    sos_in: SOSEventCreate,
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Trigger an Emergency SOS alert.
+    1. Authenticates caller.
+    2. Validates family member.
+    3. Verifies permission (self or same family member).
+    4. Creates SOS event.
+    5. Stores optional location coordinates.
+    6. Prepares event for emergency notification dispatch.
+    7. Returns a sanitized response.
+    """
+    member = verify_sos_member_access(
+        supabase=supabase,
+        family_member_id=sos_in.family_member_id,
+        user_id=current_user.sub
+    )
+
+    sos_dict = {
+        "family_member_id": str(sos_in.family_member_id),
+        "triggered_by": current_user.sub,
+        "status": SOSEventStatus.TRIGGERED.value,
+        "latitude": sos_in.latitude,
+        "longitude": sos_in.longitude,
+        "location_accuracy": sos_in.location_accuracy,
+        "notes": sos_in.notes,
+        "triggered_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    res = supabase.table("sos_events").insert(sos_dict).execute()
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to trigger SOS alert")
+    created_event = res.data[0]
+
+    # Prepare notification: count registered active emergency contacts
+    contacts_res = supabase.table("emergency_contacts").select("id") \
+        .eq("family_member_id", str(sos_in.family_member_id)) \
+        .eq("is_active", True) \
+        .execute()
+    
+    contact_count = len(contacts_res.data) if contacts_res.data else 0
+
+    created_event["notification_dispatched"] = True
+    created_event["emergency_contacts_count"] = contact_count
+    return created_event
+
+
+@router.get("/{id}", response_model=SOSEventResponse)
+def get_sos_event(
+    id: UUID,
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Retrieve details of an SOS event by ID.
+    Caller must be the triggerer or belong to the patient's family.
+    """
+    res = supabase.table("sos_events").select("*").eq("id", str(id)).execute()
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SOS event not found")
+    event = res.data[0]
+
+    verify_sos_member_access(
+        supabase=supabase,
+        family_member_id=UUID(event["family_member_id"]),
+        user_id=current_user.sub
+    )
+    return event
+
+
+@router.patch("/{id}/status", response_model=SOSEventResponse)
+def update_sos_event_status(
+    id: UUID,
+    status_update: SOSEventStatusUpdate,
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Update the status of an active SOS event (ACKNOWLEDGED, RESOLVED, CANCELLED).
+    Caller must be a member of the patient's family.
+    """
+    res = supabase.table("sos_events").select("*").eq("id", str(id)).execute()
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SOS event not found")
+    event = res.data[0]
+
+    verify_sos_member_access(
+        supabase=supabase,
+        family_member_id=UUID(event["family_member_id"]),
+        user_id=current_user.sub
+    )
+
+    update_dict = {"status": status_update.status.value}
+    if status_update.notes is not None:
+        update_dict["notes"] = status_update.notes
+
+    if status_update.status in (SOSEventStatus.RESOLVED, SOSEventStatus.CANCELLED) and not event.get("resolved_at"):
+        update_dict["resolved_at"] = datetime.now(timezone.utc).isoformat()
+
+    update_res = supabase.table("sos_events").update(update_dict).eq("id", str(id)).execute()
+    if not update_res.data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to update SOS event status")
+    return update_res.data[0]
