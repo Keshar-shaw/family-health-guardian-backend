@@ -1,0 +1,655 @@
+================================================================================
+                    FAMILY HEALTH GUARDIAN - FRONTEND REQUIREMENTS
+              Complete Comprehensive Frontend Specification & API Guide
+================================================================================
+Document Version : 2.0.0
+Backend Status   : Fully Audited (161/161 Tests Passing)
+Backend Stack    : FastAPI, Supabase PostgreSQL, Supabase Auth + JWT, PostgreSQL RLS
+Motto            : "One Family. One Health Center. One Trusted Guardian."
+================================================================================
+
+TABLE OF CONTENTS:
+--------------------------------------------------------------------------------
+1. EXECUTIVE SUMMARY & ARCHITECTURAL FOUNDATION
+2. RECOMMENDED FRONTEND TECH STACK
+3. GLOBAL STATE & CONTEXT MANAGEMENT
+4. COMPREHENSIVE ROUTE & PAGE HIERARCHY
+5. DETAILED SCREEN-BY-SCREEN SPECIFICATIONS
+   5.1 Authentication & Onboarding (/login, /register)
+   5.2 User Profile Management (/profile)
+   5.3 Family Hub & Member RBAC (/families, /families/:id)
+   5.4 Consent & Access Management (/consents)
+   5.5 Health Records & Medical Summary (/health-records)
+   5.6 Medicines & Prescriptions Catalog (/medicines)
+   5.7 Medicine Schedules & Intake Adherence Timeline (/medicine-schedules)
+   5.8 Medical Reports & Storage Document Viewer (/medical-reports)
+   5.9 Emergency Contacts & Priority Roster (/emergency-contacts)
+   5.10 Emergency SOS Broadcast & GPS Location Capture (/emergency/sos)
+   5.11 SOS Incident History & Filtering (/emergency/sos/history)
+   5.12 Notification Center & Reminder Alerts (/notifications)
+   5.13 Immutable Audit Trail & Activity Logs (/audit-logs)
+6. COMPLETE BACKEND API ENDPOINTS REFERENCE & CONTRACTS
+7. FULL TYPESCRIPT DATA MODELS & INTERFACES
+8. FRONTEND SECURITY, VALIDATION & ERROR HANDLING
+9. ENVIRONMENT CONFIGURATION (.env)
+10. STEP-BY-STEP IMPLEMENTATION ROADMAP
+
+================================================================================
+1. EXECUTIVE SUMMARY & ARCHITECTURAL FOUNDATION
+================================================================================
+The Family Health Guardian frontend is an enterprise-grade, consent-driven, 
+role-aware healthcare web application. It connects family members, patients, 
+and designated guardians in a single privacy-first portal.
+
+Core Architectural Tenets:
+1. Security Identity (auth.uid()):
+   - Authentication is performed via Supabase Auth.
+   - The frontend forwards the Bearer JWT on every API request.
+   - The backend enforces auth.uid() directly on every operation.
+2. Zero-Trust Family Context:
+   - The frontend never assumes permissions. Client-supplied family_member_id is 
+     verified against ownership or active consent.
+   - UI elements (Edit, Delete, Add Schedule, etc.) dynamically adapt based on 
+     the user's permission level (READ_ONLY vs FULL_ACCESS).
+3. Private Medical Storage:
+   - Report files are never stored in PostgreSQL as blobs.
+   - Uploads go via POST /medical-reports; downloads render secure, signed URLs 
+     with 5-minute expiries.
+4. Privacy-First Emergency SOS:
+   - Location is captured ONLY during an explicit SOS trigger.
+   - No continuous background tracking.
+5. Tamper-Evident Audit Trail:
+   - All healthcare operations (view, create, update, delete) are logged.
+   - Passwords, tokens, and secrets are sanitized before persistence.
+
+================================================================================
+2. RECOMMENDED FRONTEND TECH STACK
+================================================================================
+- Framework: React 18+ or Next.js (App Router) or Vite + React
+- Language: TypeScript (Strict mode enabled)
+- Styling: Tailwind CSS or Vanilla CSS Modules (custom healthcare color palette)
+- State & Server Cache: 
+  * TanStack Query (React Query) v5 for API caching, pagination & auto-invalidation
+  * React Context or Zustand for Active Family / Member selection
+- Authentication: `@supabase/supabase-js` (handles JWT, session storage & refresh)
+- HTTP Client: Axios (configured with auth interceptor & automatic retry)
+- Icons: Lucide React (`lucide-react`)
+- Maps (SOS Location): Leaflet (`react-leaflet`) or Mapbox GL (for GPS coordinate display)
+- Form Validation: React Hook Form + Zod (mirroring backend Pydantic schemas)
+- Toast / Alerts: Sonner or React Hot Toast
+
+================================================================================
+3. GLOBAL STATE & CONTEXT MANAGEMENT
+================================================================================
+The application requires 4 global providers:
+
+1. AuthContext:
+   - Stores current Supabase `user`, `session`, `accessToken`.
+   - Handles login, signup, logout, session expiration refresh.
+   - Profile state (`GET /profiles/me`).
+
+2. FamilyContext:
+   - `families`: List of families user belongs to (`GET /families`).
+   - `activeFamily`: Currently selected family.
+   - `activeFamilyMembers`: Members of active family.
+   - `selectedMemberId`: Target member currently being viewed/managed.
+
+3. NotificationContext:
+   - Unread badge counter.
+   - Periodic poll or Supabase Realtime channel for incoming alerts.
+   - Toast trigger for urgent `EMERGENCY_SOS` or `MEDICINE_REMINDER`.
+
+4. SOSContext:
+   - Global floating emergency SOS trigger button.
+   - Active emergency modal popup if an active SOS event exists in the family.
+
+================================================================================
+4. COMPREHENSIVE ROUTE & PAGE HIERARCHY
+================================================================================
+Route Path                | Page Name                  | Access Level
+--------------------------+----------------------------+-----------------------
+/                         | Landing Page               | Public
+/login                    | Sign In                    | Public (Guest)
+/register                 | Sign Up                    | Public (Guest)
+/forgot-password          | Password Recovery          | Public (Guest)
+/dashboard                | Patient Overview Dashboard | Authenticated
+/profile                  | User Profile Settings      | Authenticated
+/families                 | Family Workspaces Hub      | Authenticated
+/families/:id             | Family Workspace Detail    | Authenticated
+/consents                 | Consent Management Center  | Authenticated
+/health-records           | Health Records Overview    | Authenticated
+/health-records/:id       | Record Details & Vitals    | Authenticated
+/medicines                | Prescriptions & Medicines  | Authenticated
+/medicines/schedule       | Intake Schedule & Adherence| Authenticated
+/medical-reports          | Medical Documents & Storage| Authenticated
+/emergency-contacts       | Emergency Contacts Roster  | Authenticated
+/emergency/sos            | SOS Active Incident Room   | Authenticated
+/emergency/sos/history    | SOS Incident Log History   | Authenticated
+/notifications            | Notification Center Feed   | Authenticated
+/audit-logs               | Immutable Audit Trail Log  | Authenticated (Admin/Guardian)
+
+================================================================================
+5. DETAILED SCREEN-BY-SCREEN SPECIFICATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 Authentication & Onboarding (/login, /register)
+--------------------------------------------------------------------------------
+- Sign In (`/login`):
+  * Email and Password fields.
+  * Loading state and error toast on 401 invalid credentials.
+  * Direct redirect to `/dashboard` upon successful login.
+- Sign Up (`/register`):
+  * Full Name, Email, Password, Confirm Password.
+  * Password strength check (min 8 chars, mixed case, number, symbol).
+  * Automatically creates user profile in Supabase.
+
+--------------------------------------------------------------------------------
+5.2 User Profile Management (/profile)
+--------------------------------------------------------------------------------
+- Endpoints: `GET /profiles/me`, `PUT /profiles/me`
+- Fields: Full Name, Phone Number, Avatar URL.
+- Features: View current details, edit in-place with instant validation.
+
+--------------------------------------------------------------------------------
+5.3 Family Hub & Member RBAC (/families, /families/:id)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /families`
+  * `POST /families` (body: `{ name }`)
+  * `GET /families/{id}`
+  * `POST /families/{id}/members` (body: `{ user_id, role: "ADMIN" | "MEMBER" }`)
+  * `DELETE /families/{id}/members/{user_id}`
+- Features:
+  * Family Switcher: Dropdown in the top navigation bar.
+  * Member Roster: Shows member name, user ID, role badge (ADMIN in Indigo, MEMBER in Teal).
+  * Add Member Modal: ADMINs can add members via user UUID.
+  * Remove Member: ADMINs can remove any member; members can self-remove.
+
+--------------------------------------------------------------------------------
+5.4 Consent & Access Management (/consents)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /consents`
+  * `POST /consents` (body: `{ grantee_id, family_id, permission_level }`)
+  * `PATCH /consents/{id}` (body: `{ status: "ACTIVE" | "REVOKED" | "DENIED" }`)
+- Permission Levels:
+  * `READ_ONLY`: Guardian can view health vitals, medicines, reports.
+  * `FULL_ACCESS`: Guardian can modify, create, and delete healthcare data.
+- UI Tabs:
+  * "My Granted Consents": Consents I have given to other family members. Actions: [Revoke], [Accept], [Deny].
+  * "Consents Granted to Me": Members who granted me access to their records.
+  * "Request Access" Modal: Select target family member and permission level requested.
+
+--------------------------------------------------------------------------------
+5.5 Health Records & Medical Summary (/health-records)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /health-records?family_member_id={id}`
+  * `GET /health-records/{id}`
+  * `POST /health-records`
+  * `PUT /health-records/{id}`
+  * `DELETE /health-records/{id}`
+- Fields:
+  * Blood Group: Restricted dropdown (`A+`, `A-`, `B+`, `B-`, `AB+`, `AB-`, `O+`, `O-`).
+  * Allergies (Text area, e.g. "Peanuts, Penicillin").
+  * Chronic Conditions (Text area, e.g. "Asthma, Hypertension").
+  * Medical History (Text area, e.g. "Appendectomy in 2021").
+  * Emergency Notes (Text area, urgent notes for paramedics).
+- UI Logic:
+  * Read-only view for users with `READ_ONLY` consent; edit buttons hidden or disabled.
+  * Warning confirmation modal before deleting a record.
+
+--------------------------------------------------------------------------------
+5.6 Medicines & Prescriptions Catalog (/medicines)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /medicines?family_member_id={id}&is_active={bool}`
+  * `GET /medicines/{id}`
+  * `POST /medicines`
+  * `PUT /medicines/{id}`
+  * `DELETE /medicines/{id}`
+- Fields:
+  * Medicine Name (String, 1-100 chars, required).
+  * Dosage (String, e.g., "500mg", required).
+  * Frequency (String, e.g., "Twice daily with meals", required).
+  * Start Date / End Date (Optional date pickers).
+  * Instructions (Special notes, e.g. "Take after breakfast").
+  * Active Status (Toggle button).
+- UI Filter: Tab between "Active Medications" and "Past / Discontinued".
+
+--------------------------------------------------------------------------------
+5.7 Medicine Schedules & Intake Adherence Timeline (/medicines/schedule)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /medicine-schedules?medicine_id={id}`
+  * `POST /medicine-schedules` (body: `{ medicine_id, scheduled_time, day_of_week, dose_quantity, reminder_enabled }`)
+  * `GET /medicine-logs?family_member_id={id}&medicine_id={id}`
+  * `POST /medicine-logs` (body: `{ medicine_id, schedule_id?, status: "TAKEN" | "MISSED" | "SKIPPED", taken_at?, notes? }`)
+  * `PATCH /medicine-logs/{id}`
+- Features:
+  * Daily Intake Timeline: Morning, Afternoon, Evening, Night blocks.
+  * One-Click Action Buttons on each dose:
+    - [Mark as Taken] (Records exact taken_at timestamp).
+    - [Skip Dose] (Prompts for optional reason).
+    - [Mark Missed].
+  * Adherence Scorecard: Visual percentage ring showing 7-day adherence rate.
+  * Schedule Creator Modal: Time picker (HH:MM), day-of-week checkboxes, reminder toggle.
+
+--------------------------------------------------------------------------------
+5.8 Medical Reports & Storage Document Viewer (/medical-reports)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `POST /medical-reports` (Multipart form-data: `file`, `family_member_id`, `report_type`, `report_date`, `description`)
+  * `GET /medical-reports?family_member_id={id}&report_type={type}`
+  * `GET /medical-reports/{id}`
+  * `DELETE /medical-reports/{id}`
+- Allowed File Types: PDF, PNG, JPG, JPEG (Client validation max 15MB).
+- Report Types: `LAB_REPORT`, `PRESCRIPTION`, `IMAGING`, `DISCHARGE_SUMMARY`, `GENERAL`.
+- UI Features:
+  * Drag-and-drop upload zone with progress bar.
+  * Grid of document preview cards with file size, report date, and uploader.
+  * [View Document] button: Securely opens pre-signed Supabase Storage URL in new tab.
+  * [Delete Report] button: Purges file from storage and metadata from database.
+
+--------------------------------------------------------------------------------
+5.9 Emergency Contacts & Priority Roster (/emergency-contacts)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /emergency-contacts?family_member_id={id}`
+  * `POST /emergency-contacts`
+  * `GET /emergency-contacts/{id}`
+  * `PUT /emergency-contacts/{id}`
+  * `DELETE /emergency-contacts/{id}`
+- Fields:
+  * Full Name (Required, 1-100 chars).
+  * Relationship (e.g., Parent, Spouse, Physician, Neighbor).
+  * Phone Number (Required, validated against regex `^\+?[0-9]{5,20}$`).
+  * Email (Optional).
+  * Priority Rank (Number 1 to 10; Rank 1 = Primary Contact).
+  * Active Toggle (Include in emergency broadcasts).
+- UI Feature: Contact cards sorted with primary contact pinned at top with prominent call icon.
+
+--------------------------------------------------------------------------------
+5.10 Emergency SOS Broadcast & GPS Location Capture (/emergency/sos)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `POST /emergency/sos`
+  * `GET /emergency/sos/{id}`
+  * `PATCH /emergency/sos/{id}/status`
+- Prominent Emergency Trigger:
+  * Floating Red SOS Button available on every screen.
+  * Hold-to-activate (3 seconds countdown) or double-tap confirmation to prevent accidental triggers.
+  * HTML5 Geolocation API integration:
+    - Extracts `latitude` (-90 to 90), `longitude` (-180 to 180), `accuracy` (meters), `timestamp`.
+    - If GPS is disabled/denied, triggers alert immediately without location.
+  * Optional quick text note (e.g. "Chest pain, need help").
+- Active SOS Emergency Modal:
+  * Real-time pop-up notification across all family members when an SOS is `TRIGGERED`.
+  * Interactive Map (Leaflet / Mapbox) showing distressed member's coordinates and accuracy radius.
+  * Quick Dial Emergency Contacts bar.
+  * Status Control Actions:
+    - [Acknowledge] -> Changes status to `ACKNOWLEDGED`.
+    - [Mark Resolved] -> Prompts for resolution note, records `resolved_at`.
+    - [Cancel False Alarm] -> Status `CANCELLED`.
+
+--------------------------------------------------------------------------------
+5.11 SOS Incident History & Filtering (/emergency/sos/history)
+--------------------------------------------------------------------------------
+- Endpoint:
+  * `GET /emergency/sos/history?family_member_id={id}&status={status}&start_date={date}&end_date={date}&limit=50&offset=0`
+- Features:
+  * Reverse chronological log table (newest incident first).
+  * Status Badges:
+    - `TRIGGERED` (Flashing Red)
+    - `ACKNOWLEDGED` (Amber)
+    - `RESOLVED` (Green)
+    - `CANCELLED` (Gray)
+  * Filters: Status, Date Range picker, Family Member dropdown.
+  * Detailed modal showing responder notes, incident duration, and GPS map snippet.
+
+--------------------------------------------------------------------------------
+5.12 Notification Center & Reminder Alerts (/notifications)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /notifications?status={status}&type={type}&limit=50&offset=0`
+  * `PATCH /notifications/{id}/read`
+- Notification Types:
+  * `MEDICINE_REMINDER` (Icon: Pill / Medicine bottle)
+  * `EMERGENCY_SOS` (Icon: Red siren / Alert triangle)
+- Statuses: `PENDING`, `SENT`, `FAILED`, `READ`.
+- UI Features:
+  * Top navigation bell icon with unread count badge.
+  * Dropdown preview + full-page feed at `/notifications`.
+  * Click on notification marks it as `READ` and routes to relevant resource (e.g. to medicine schedule or SOS event).
+
+--------------------------------------------------------------------------------
+5.13 Immutable Audit Trail & Activity Logs (/audit-logs)
+--------------------------------------------------------------------------------
+- Endpoint:
+  * `GET /audit-logs?family_id={id}&family_member_id={id}&action={action}&resource_type={type}&limit=50&offset=0`
+- Tracked Actions:
+  * `HEALTH_RECORD_CREATED`, `HEALTH_RECORD_VIEWED`, `HEALTH_RECORD_UPDATED`, `HEALTH_RECORD_DELETED`
+  * `MEDICINE_CREATED`, `MEDICINE_UPDATED`
+  * `MEDICAL_REPORT_UPLOADED`, `MEDICAL_REPORT_DELETED`
+  * `SOS_TRIGGERED`, `SOS_STATUS_CHANGED`
+  * `EMERGENCY_CONTACT_CHANGED`
+- UI Display:
+  * Audit table with Timestamp, Actor User ID, Action Badge, Target Entity, and Safe Context.
+  * Reassurance banner: "Audit logs are strictly tamper-evident and immutable (protected by database trigger)."
+
+================================================================================
+6. COMPLETE BACKEND API ENDPOINTS REFERENCE & CONTRACTS
+================================================================================
+Base URL: `http://127.0.0.1:8000/api/v1` (or via `VITE_API_BASE_URL`)
+Header Required on all authenticated endpoints:
+  `Authorization: Bearer <supabase_jwt_token>`
+
+--------------------------------------------------------------------------------
+METHOD | ENDPOINT                               | PAYLOAD (BODY / QUERY)
+-------+----------------------------------------+-------------------------------
+GET    | /health                                | None (Public)
+GET    | /profiles/me                           | None
+PUT    | /profiles/me                           | { full_name?, avatar_url? }
+POST   | /families                              | { name }
+GET    | /families                              | None
+GET    | /families/{id}                         | None
+POST   | /families/{id}/members                 | { user_id, role: "ADMIN"|"MEMBER" }
+DELETE | /families/{id}/members/{user_id}       | None
+POST   | /consents                              | { grantee_id, family_id, permission_level }
+GET    | /consents                              | None
+PATCH  | /consents/{id}                         | { status?, permission_level? }
+POST   | /health-records                        | { family_member_id, blood_group?, allergies?, chronic_conditions?, medical_history?, emergency_notes? }
+GET    | /health-records                        | Query: family_member_id?
+GET    | /health-records/{id}                   | None
+PUT    | /health-records/{id}                   | Partial HealthRecord fields
+DELETE | /health-records/{id}                   | None
+POST   | /medicines                             | { family_member_id, medicine_name, dosage, frequency, instructions?, start_date?, end_date?, is_active? }
+GET    | /medicines                             | Query: family_member_id?, is_active?
+GET    | /medicines/{id}                        | None
+PUT    | /medicines/{id}                        | Partial Medicine fields
+DELETE | /medicines/{id}                        | None
+POST   | /medicine-schedules                   | { medicine_id, scheduled_time, day_of_week?, dose_quantity?, reminder_enabled? }
+GET    | /medicine-schedules                   | Query: medicine_id?
+GET    | /medicine-schedules/{id}               | None
+PUT    | /medicine-schedules/{id}               | Partial MedicineSchedule fields
+DELETE | /medicine-schedules/{id}               | None
+POST   | /medicine-logs                         | { medicine_id, schedule_id?, status, taken_at?, notes? }
+GET    | /medicine-logs                         | Query: medicine_id?, family_member_id?, start_date?, end_date?
+GET    | /medicine-logs/{id}                    | None
+PATCH  | /medicine-logs/{id}                    | { status, notes? }
+DELETE | /medicine-logs/{id}                    | None
+POST   | /emergency-contacts                    | { family_member_id, name, relationship?, phone, email?, priority, is_active }
+GET    | /emergency-contacts                    | Query: family_member_id?
+GET    | /emergency-contacts/{id}               | None
+PUT    | /emergency-contacts/{id}               | Partial EmergencyContact fields
+DELETE | /emergency-contacts/{id}               | None
+POST   | /emergency/sos                         | { family_member_id, latitude?, longitude?, accuracy?, timestamp?, notes? }
+GET    | /emergency/sos/history                 | Query: family_member_id?, status?, start_date?, end_date?, limit?, offset?
+GET    | /emergency/sos/{id}                    | None
+PATCH  | /emergency/sos/{id}/status             | { status: "ACKNOWLEDGED"|"RESOLVED"|"CANCELLED", notes? }
+POST   | /medical-reports                       | FormData: file, family_member_id, report_type?, report_date?, description?
+GET    | /medical-reports                       | Query: family_member_id?, report_type?
+GET    | /medical-reports/{id}                  | None
+DELETE | /medical-reports/{id}                  | None
+GET    | /notifications                         | Query: status?, type?, limit?, offset?
+PATCH  | /notifications/{id}/read               | None
+GET    | /audit-logs                            | Query: family_id?, family_member_id?, action?, resource_type?, limit?, offset?
+
+================================================================================
+7. FULL TYPESCRIPT DATA MODELS & INTERFACES
+================================================================================
+
+```typescript
+// 1. User & Profile
+export interface Profile {
+  id: string;
+  full_name: string;
+  avatar_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 2. Families & Members
+export type FamilyRole = 'ADMIN' | 'MEMBER';
+
+export interface FamilyMember {
+  id: string;
+  family_id: string;
+  user_id: string;
+  role: FamilyRole;
+  created_at: string;
+}
+
+export interface Family {
+  id: string;
+  name: string;
+  created_by: string;
+  members?: FamilyMember[];
+  created_at: string;
+  updated_at: string;
+}
+
+// 3. Consents & Access Control
+export type ConsentStatus = 'PENDING' | 'ACTIVE' | 'REVOKED' | 'DENIED';
+export type ConsentPermission = 'READ_ONLY' | 'FULL_ACCESS';
+
+export interface Consent {
+  id: string;
+  granter_id: string;
+  grantee_id: string;
+  family_id: string;
+  permission_level: ConsentPermission;
+  status: ConsentStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+// 4. Health Records
+export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
+
+export interface HealthRecord {
+  id: string;
+  family_member_id: string;
+  blood_group?: BloodGroup;
+  allergies?: string;
+  chronic_conditions?: string;
+  medical_history?: string;
+  emergency_notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 5. Medicines & Prescriptions
+export interface Medicine {
+  id: string;
+  family_member_id: string;
+  medicine_name: string;
+  dosage: string;
+  frequency: string;
+  instructions?: string;
+  start_date?: string;
+  end_date?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// 6. Medicine Schedules
+export interface MedicineSchedule {
+  id: string;
+  medicine_id: string;
+  scheduled_time: string; // "HH:MM" format
+  day_of_week?: number;   // 0 (Sunday) to 6 (Saturday)
+  dose_quantity?: string;
+  reminder_enabled: boolean;
+  start_date?: string;
+  end_date?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// 7. Medicine Logs
+export type MedicineLogStatus = 'TAKEN' | 'MISSED' | 'SKIPPED';
+
+export interface MedicineLog {
+  id: string;
+  medicine_id: string;
+  schedule_id?: string;
+  family_member_id: string;
+  scheduled_at?: string;
+  taken_at?: string;
+  status: MedicineLogStatus;
+  notes?: string;
+  created_at: string;
+}
+
+// 8. Emergency Contacts
+export interface EmergencyContact {
+  id: string;
+  family_member_id: string;
+  name: string;
+  relationship?: string;
+  phone: string;
+  email?: string;
+  priority: number; // 1 to 10
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// 9. Emergency SOS & Location
+export type SOSEventStatus = 'TRIGGERED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'CANCELLED';
+
+export interface SOSEvent {
+  id: string;
+  family_member_id: string;
+  triggered_by: string;
+  status: SOSEventStatus;
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number;
+  location_accuracy?: number;
+  timestamp?: string;
+  location_timestamp?: string;
+  triggered_at: string;
+  resolved_at?: string;
+  notes?: string;
+  notification_dispatched: boolean;
+  emergency_contacts_count: number;
+}
+
+// 10. Medical Reports
+export interface MedicalReport {
+  id: string;
+  family_member_id: string;
+  uploaded_by: string;
+  file_name: string;
+  storage_path: string;
+  report_type: string;
+  mime_type: string;
+  file_size: number;
+  report_date: string;
+  description?: string;
+  download_url?: string;
+  created_at: string;
+}
+
+// 11. Notifications
+export type NotificationType = 'MEDICINE_REMINDER' | 'EMERGENCY_SOS';
+export type NotificationStatus = 'PENDING' | 'SENT' | 'FAILED' | 'READ';
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  family_member_id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  status: NotificationStatus;
+  scheduled_at?: string;
+  sent_at?: string;
+  read_at?: string;
+  created_at: string;
+}
+
+// 12. Audit Logs
+export interface AuditLog {
+  id: string;
+  actor_user_id: string;
+  family_id?: string;
+  family_member_id?: string;
+  action: string;
+  resource_type: string;
+  resource_id?: string;
+  metadata: Record<string, any>;
+  created_at: string;
+}
+```
+
+================================================================================
+8. FRONTEND SECURITY, VALIDATION & ERROR HANDLING
+================================================================================
+1. Client-Side Input Validation:
+   - Blood Group: Must strictly match one of the 8 allowed values.
+   - Phone Number: Validate using regex `/^\+?[0-9]{5,20}$/`.
+   - File Uploads: Reject files > 15MB or not matching PDF/PNG/JPG before upload.
+   - Coordinates: If latitude is provided, longitude is required (-90 to 90, -180 to 180).
+2. Never send user emails for authorization:
+   - Always rely on user UUIDs and Supabase Auth token payload `sub`.
+3. Error Code Mapping:
+   - 400 Bad Request: Display validation error message from `detail`.
+   - 401 Unauthorized: Redirect to `/login`, clear cached user session.
+   - 403 Forbidden: Display friendly warning toast (e.g. "Active FULL_ACCESS consent required for this action").
+   - 404 Not Found: Display resource missing empty state.
+4. Secret Sanitization Guarantee:
+   - Never send tokens or passwords in query params or request bodies.
+   - Form inputs for sensitive data should clear on submit.
+
+================================================================================
+9. ENVIRONMENT CONFIGURATION (.env)
+================================================================================
+Create `.env` in your frontend project root:
+
+```env
+# Backend API Base URL
+VITE_API_BASE_URL="http://127.0.0.1:8000/api/v1"
+
+# Supabase Client Configuration
+VITE_SUPABASE_URL="https://your-project.supabase.co"
+VITE_SUPABASE_ANON_KEY="your-supabase-anon-key"
+```
+
+================================================================================
+10. STEP-BY-STEP IMPLEMENTATION ROADMAP
+================================================================================
+Phase 1: Foundation & Auth
+  [ ] Initialize React/Next.js TypeScript project.
+  [ ] Set up Supabase client and AuthContext.
+  [ ] Implement Axios client with Bearer token interceptor.
+  [ ] Create Login, Registration, and Profile settings pages.
+
+Phase 2: Families & Consents
+  [ ] Implement Family Switcher and Family Workspace view.
+  [ ] Build member list and Add Member modal (ADMIN only).
+  [ ] Build Consent Hub with "Granted by Me" and "Granted to Me" tabs.
+
+Phase 3: Core Health Features
+  [ ] Build Health Records summary view and edit modal.
+  [ ] Build Medicines catalog and active/past filters.
+  [ ] Build Medicine Schedules & Daily Intake Log timeline.
+  [ ] Implement Medical Reports drag-and-drop uploader with signed-URL viewer.
+
+Phase 4: Emergency System & Real-Time Alerts
+  [ ] Build Emergency Contacts roster with priority rank ordering.
+  [ ] Implement Floating SOS button with 3-second hold and Geolocation API.
+  [ ] Implement active SOS incident modal with Leaflet / Mapbox GPS map.
+  [ ] Build SOS incident history table with date/status filters.
+
+Phase 5: Notifications, Audit & Polish
+  [ ] Build Notification Center feed with unread count and mark-as-read.
+  [ ] Build Audit Trail table for admins and guardians.
+  [ ] Test complete user journey end-to-end against FastAPI backend.
+================================================================================
+                        END OF FRONTEND REQUIREMENTS
+================================================================================
