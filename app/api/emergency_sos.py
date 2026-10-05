@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import List, Optional
+from datetime import date, datetime, timezone
 from uuid import UUID
 from app.auth.dependencies import get_current_user, get_supabase
 from app.auth.jwt import UserTokenPayload
@@ -99,6 +100,54 @@ def trigger_sos_event(
     created_event["notification_dispatched"] = True
     created_event["emergency_contacts_count"] = contact_count
     return created_event
+
+
+@router.get("/history", response_model=List[SOSEventResponse])
+def get_sos_history(
+    family_member_id: Optional[UUID] = None,
+    status: Optional[SOSEventStatus] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Retrieve SOS event history with filters, ordered by newest first.
+    Authorized for self or family members.
+    """
+    if family_member_id is not None:
+        verify_sos_member_access(
+            supabase=supabase,
+            family_member_id=family_member_id,
+            user_id=current_user.sub
+        )
+        query = supabase.table("sos_events").select("*").eq("family_member_id", str(family_member_id))
+    else:
+        # Find all families current user belongs to
+        fm_res = supabase.table("family_members").select("family_id").eq("user_id", current_user.sub).execute()
+        family_ids = [m["family_id"] for m in (fm_res.data or [])]
+        if not family_ids:
+            return []
+
+        all_members_res = supabase.table("family_members").select("id").in_("family_id", family_ids).execute()
+        authorized_member_ids = [m["id"] for m in (all_members_res.data or [])]
+        if not authorized_member_ids:
+            return []
+        
+        query = supabase.table("sos_events").select("*").in_("family_member_id", authorized_member_ids)
+
+    if status is not None:
+        query = query.eq("status", status.value)
+    if start_date is not None:
+        query = query.gte("triggered_at", f"{start_date}T00:00:00Z")
+    if end_date is not None:
+        query = query.lte("triggered_at", f"{end_date}T23:59:59Z")
+
+    query = query.order("triggered_at", desc=True).range(offset, offset + limit - 1)
+    res = query.execute()
+    return res.data if res.data else []
 
 
 @router.get("/{id}", response_model=SOSEventResponse)

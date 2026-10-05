@@ -21,6 +21,22 @@ class MockQueryBuilder:
         self._data = [item for item in self._data if str(item.get(column)) in val_strs]
         return self
 
+    def order(self, column, desc=False):
+        self._data.sort(key=lambda x: str(x.get(column, "")), reverse=desc)
+        return self
+
+    def range(self, start, end):
+        self._data = self._data[start : end + 1]
+        return self
+
+    def gte(self, column, value):
+        self._data = [item for item in self._data if str(item.get(column, "")) >= str(value)]
+        return self
+
+    def lte(self, column, value):
+        self._data = [item for item in self._data if str(item.get(column, "")) <= str(value)]
+        return self
+
     def insert(self, payload):
         p = dict(payload)
         if "id" not in p:
@@ -339,3 +355,231 @@ def test_patch_sos_status_resolve_and_cancel(client, auth_headers, test_user_id)
 def test_unauthenticated_request_rejected(client):
     response = client.post("/emergency/sos", json={"family_member_id": str(uuid.uuid4())})
     assert response.status_code in (401, 403)
+
+
+def test_get_sos_history_self_and_family(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+    event_1 = str(uuid.uuid4())
+    event_2 = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "sos_events": [
+            {
+                "id": event_1,
+                "family_member_id": family_member_id,
+                "triggered_by": test_user_id,
+                "status": "RESOLVED",
+                "triggered_at": "2026-10-05T10:00:00Z"
+            },
+            {
+                "id": event_2,
+                "family_member_id": family_member_id,
+                "triggered_by": test_user_id,
+                "status": "TRIGGERED",
+                "triggered_at": "2026-10-06T12:00:00Z"
+            }
+        ]
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    response = client.get("/emergency/sos/history", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    # Verify ordered newest first
+    assert data[0]["id"] == event_2
+    assert data[1]["id"] == event_1
+
+
+def test_get_sos_history_filtered_by_member(client, auth_headers, test_user_id):
+    member_1 = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+    event_1 = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": member_1,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "sos_events": [
+            {
+                "id": event_1,
+                "family_member_id": member_1,
+                "triggered_by": test_user_id,
+                "status": "TRIGGERED",
+                "triggered_at": "2026-10-06T12:00:00Z"
+            }
+        ]
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    response = client.get(f"/emergency/sos/history?family_member_id={member_1}", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["id"] == event_1
+
+
+def test_get_sos_history_filtered_by_status(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+    event_triggered = str(uuid.uuid4())
+    event_resolved = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "sos_events": [
+            {
+                "id": event_triggered,
+                "family_member_id": family_member_id,
+                "triggered_by": test_user_id,
+                "status": "TRIGGERED",
+                "triggered_at": "2026-10-06T12:00:00Z"
+            },
+            {
+                "id": event_resolved,
+                "family_member_id": family_member_id,
+                "triggered_by": test_user_id,
+                "status": "RESOLVED",
+                "triggered_at": "2026-10-05T10:00:00Z"
+            }
+        ]
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    response = client.get("/emergency/sos/history?status=TRIGGERED", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["id"] == event_triggered
+    assert data[0]["status"] == "TRIGGERED"
+
+
+def test_get_sos_history_filtered_by_date(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+    event_oct_1 = str(uuid.uuid4())
+    event_oct_5 = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "sos_events": [
+            {
+                "id": event_oct_1,
+                "family_member_id": family_member_id,
+                "triggered_by": test_user_id,
+                "status": "RESOLVED",
+                "triggered_at": "2026-10-01T10:00:00Z"
+            },
+            {
+                "id": event_oct_5,
+                "family_member_id": family_member_id,
+                "triggered_by": test_user_id,
+                "status": "RESOLVED",
+                "triggered_at": "2026-10-05T10:00:00Z"
+            }
+        ]
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    response = client.get("/emergency/sos/history?start_date=2026-10-04&end_date=2026-10-06", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["id"] == event_oct_5
+
+
+def test_get_sos_history_pagination(client, auth_headers, test_user_id):
+    family_member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+
+    events = [
+        {
+            "id": str(uuid.uuid4()),
+            "family_member_id": family_member_id,
+            "triggered_by": test_user_id,
+            "status": "TRIGGERED",
+            "triggered_at": f"2026-10-0{i+1}T10:00:00Z"
+        }
+        for i in range(5)
+    ]
+
+    mock_db = setup_mock_supabase({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "sos_events": events
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    # Request limit=2, offset=0 (first 2 of newest)
+    res_page_1 = client.get("/emergency/sos/history?limit=2&offset=0", headers=auth_headers)
+    # Request limit=2, offset=2 (next 2)
+    res_page_2 = client.get("/emergency/sos/history?limit=2&offset=2", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res_page_1.status_code == 200
+    assert len(res_page_1.json()) == 2
+    assert res_page_2.status_code == 200
+    assert len(res_page_2.json()) == 2
+    assert res_page_1.json()[0]["id"] != res_page_2.json()[0]["id"]
+
+
+def test_get_sos_history_unauthorized_member_forbidden(client, auth_headers, test_user_id):
+    other_patient_id = str(uuid.uuid4())
+    unrelated_member_id = str(uuid.uuid4())
+    other_family_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_supabase({
+        "family_members": [
+            {
+                "id": unrelated_member_id,
+                "family_id": other_family_id,
+                "user_id": other_patient_id,
+                "role": "MEMBER"
+            }
+        ],
+        "sos_events": []
+    })
+
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    response = client.get(f"/emergency/sos/history?family_member_id={unrelated_member_id}", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 403
