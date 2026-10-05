@@ -68,7 +68,7 @@ def create_health_record(
     Create a new health record for a family member.
     Caller must be the family member themselves or have ACTIVE FULL_ACCESS consent.
     """
-    verify_member_access(
+    member = verify_member_access(
         supabase=supabase,
         family_member_id=record_in.family_member_id,
         user_id=current_user.sub,
@@ -81,7 +81,20 @@ def create_health_record(
     res = supabase.table("health_records").insert(record_dict).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to create health record")
-    return res.data[0]
+    created = res.data[0]
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.HEALTH_RECORD_CREATED.value,
+        resource_type=AuditResourceType.HEALTH_RECORD.value,
+        resource_id=UUID(created["id"]),
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=record_in.family_member_id,
+        metadata={"blood_group": created.get("blood_group")}
+    )
+    return created
 
 
 @router.get("", response_model=List[HealthRecordResponse])
@@ -146,11 +159,22 @@ def get_health_record(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Health record not found")
     record = res.data[0]
 
-    verify_member_access(
+    member = verify_member_access(
         supabase=supabase,
         family_member_id=UUID(record["family_member_id"]),
         user_id=current_user.sub,
         require_full_access=False
+    )
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.HEALTH_RECORD_VIEWED.value,
+        resource_type=AuditResourceType.HEALTH_RECORD.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=UUID(record["family_member_id"])
     )
     return record
 
@@ -171,7 +195,7 @@ def update_health_record(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Health record not found")
     record = res.data[0]
 
-    verify_member_access(
+    member = verify_member_access(
         supabase=supabase,
         family_member_id=UUID(record["family_member_id"]),
         user_id=current_user.sub,
@@ -185,7 +209,20 @@ def update_health_record(
     update_res = supabase.table("health_records").update(update_fields).eq("id", str(id)).execute()
     if not update_res.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to update health record")
-    return update_res.data[0]
+    updated = update_res.data[0]
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.HEALTH_RECORD_UPDATED.value,
+        resource_type=AuditResourceType.HEALTH_RECORD.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=UUID(record["family_member_id"]),
+        metadata={"updated_fields": list(update_fields.keys())}
+    )
+    return updated
 
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -203,7 +240,7 @@ def delete_health_record(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Health record not found")
     record = res.data[0]
 
-    verify_member_access(
+    member = verify_member_access(
         supabase=supabase,
         family_member_id=UUID(record["family_member_id"]),
         user_id=current_user.sub,
@@ -211,4 +248,15 @@ def delete_health_record(
     )
 
     supabase.table("health_records").delete().eq("id", str(id)).execute()
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.HEALTH_RECORD_DELETED.value,
+        resource_type=AuditResourceType.HEALTH_RECORD.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=UUID(record["family_member_id"])
+    )
     return None

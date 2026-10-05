@@ -125,6 +125,18 @@ def trigger_sos_event(
     except Exception:
         pass
 
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.SOS_TRIGGERED.value,
+        resource_type=AuditResourceType.SOS_EVENT.value,
+        resource_id=UUID(created_event["id"]),
+        family_id=UUID(member["family_id"]) if member and member.get("family_id") else None,
+        family_member_id=sos_in.family_member_id,
+        metadata={"has_location": bool(created_event.get("latitude")), "notes": sos_in.notes}
+    )
+
     return created_event
 
 
@@ -216,7 +228,7 @@ def update_sos_event_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SOS event not found")
     event = res.data[0]
 
-    verify_sos_member_access(
+    member = verify_sos_member_access(
         supabase=supabase,
         family_member_id=UUID(event["family_member_id"]),
         user_id=current_user.sub,
@@ -233,4 +245,18 @@ def update_sos_event_status(
     update_res = supabase.table("sos_events").update(update_dict).eq("id", str(id)).execute()
     if not update_res.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to update SOS event status")
-    return update_res.data[0]
+    updated = update_res.data[0]
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.SOS_STATUS_CHANGED.value,
+        resource_type=AuditResourceType.SOS_EVENT.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member and member.get("family_id") else None,
+        family_member_id=UUID(event["family_member_id"]),
+        metadata={"new_status": status_update.status.value, "notes": status_update.notes}
+    )
+
+    return updated

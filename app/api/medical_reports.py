@@ -55,8 +55,7 @@ async def upload_medical_report(
     - Report metadata is stored in PostgreSQL with RLS.
     - Requires self or ACTIVE FULL_ACCESS consent.
     """
-    # 1. Authorize user for the family member
-    verify_member_access(
+    member = verify_member_access(
         supabase=supabase,
         family_member_id=family_member_id,
         user_id=current_user.sub,
@@ -122,6 +121,18 @@ async def upload_medical_report(
 
     report_record = res.data[0]
     report_record["download_url"] = get_signed_url(supabase, storage_path, expires_in=300)
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.MEDICAL_REPORT_UPLOADED.value,
+        resource_type=AuditResourceType.MEDICAL_REPORT.value,
+        resource_id=UUID(report_record["id"]),
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=family_member_id,
+        metadata={"file_name": sanitized_filename, "report_type": report_type.upper(), "file_size": file_size}
+    )
     return report_record
 
 
@@ -226,7 +237,7 @@ def delete_medical_report(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Medical report not found")
     report = res.data[0]
 
-    verify_member_access(
+    member = verify_member_access(
         supabase=supabase,
         family_member_id=UUID(report["family_member_id"]),
         user_id=current_user.sub,
@@ -241,4 +252,16 @@ def delete_medical_report(
 
     # 2. Delete metadata row
     supabase.table("medical_reports").delete().eq("id", str(id)).execute()
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.MEDICAL_REPORT_DELETED.value,
+        resource_type=AuditResourceType.MEDICAL_REPORT.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=UUID(report["family_member_id"]),
+        metadata={"file_name": report.get("file_name")}
+    )
     return None

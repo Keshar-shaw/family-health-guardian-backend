@@ -24,7 +24,7 @@ def create_emergency_contact(
     Register a new emergency contact for a family member.
     Caller must be the family member themselves or have ACTIVE FULL_ACCESS consent.
     """
-    verify_medicine_access(
+    member = verify_medicine_access(
         supabase=supabase,
         family_member_id=contact_in.family_member_id,
         user_id=current_user.sub,
@@ -37,7 +37,20 @@ def create_emergency_contact(
     res = supabase.table("emergency_contacts").insert(contact_dict).execute()
     if not res.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to create emergency contact")
-    return res.data[0]
+    created = res.data[0]
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.EMERGENCY_CONTACT_CHANGED.value,
+        resource_type=AuditResourceType.EMERGENCY_CONTACT.value,
+        resource_id=UUID(created["id"]),
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=contact_in.family_member_id,
+        metadata={"change": "CREATED", "name": created.get("name"), "priority": created.get("priority")}
+    )
+    return created
 
 
 @router.get("", response_model=List[EmergencyContactResponse])
@@ -136,7 +149,7 @@ def update_emergency_contact(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Emergency contact not found")
     contact = res.data[0]
 
-    verify_medicine_access(
+    member = verify_medicine_access(
         supabase=supabase,
         family_member_id=UUID(contact["family_member_id"]),
         user_id=current_user.sub,
@@ -150,7 +163,20 @@ def update_emergency_contact(
     update_res = supabase.table("emergency_contacts").update(update_fields).eq("id", str(id)).execute()
     if not update_res.data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to update emergency contact")
-    return update_res.data[0]
+    updated = update_res.data[0]
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.EMERGENCY_CONTACT_CHANGED.value,
+        resource_type=AuditResourceType.EMERGENCY_CONTACT.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=UUID(contact["family_member_id"]),
+        metadata={"change": "UPDATED", "updated_fields": list(update_fields.keys())}
+    )
+    return updated
 
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -168,7 +194,7 @@ def delete_emergency_contact(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Emergency contact not found")
     contact = res.data[0]
 
-    verify_medicine_access(
+    member = verify_medicine_access(
         supabase=supabase,
         family_member_id=UUID(contact["family_member_id"]),
         user_id=current_user.sub,
@@ -176,4 +202,16 @@ def delete_emergency_contact(
     )
 
     supabase.table("emergency_contacts").delete().eq("id", str(id)).execute()
+
+    from app.services.audit import AuditService, AuditAction, AuditResourceType
+    AuditService.log_action(
+        supabase=supabase,
+        actor_user_id=current_user.sub,
+        action=AuditAction.EMERGENCY_CONTACT_CHANGED.value,
+        resource_type=AuditResourceType.EMERGENCY_CONTACT.value,
+        resource_id=id,
+        family_id=UUID(member["family_id"]) if member.get("family_id") else None,
+        family_member_id=UUID(contact["family_member_id"]),
+        metadata={"change": "DELETED", "name": contact.get("name")}
+    )
     return None
