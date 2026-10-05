@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+from app.api.health import router as health_router
+from app.api.profiles import router as profiles_router
+from app.api.families import router as families_router
+from app.api.consents import router as consents_router
+
+api_router = APIRouter()
+api_router.include_router(health_router)
+api_router.include_router(profiles_router)
+api_router.include_router(families_router)
+api_router.include_router(consents_router)
