@@ -1,0 +1,184 @@
+import os
+from pathlib import Path
+import logging
+from typing import Optional, Tuple, List
+import joblib
+import numpy as np
+
+from app.schemas.ml_prediction import (
+    DiabetesPredictionRequest,
+    DiabetesPredictionResponse,
+    GenderEnum,
+    SmokingHistoryEnum
+)
+
+logger = logging.getLogger(__name__)
+
+# Expected model features in order
+EXPECTED_FEATURES = [
+    'age',
+    'hypertension',
+    'heart_disease',
+    'bmi',
+    'HbA1c_level',
+    'blood_glucose_level',
+    'gender_Male',
+    'gender_Other',
+    'smoking_history_current',
+    'smoking_history_ever',
+    'smoking_history_former',
+    'smoking_history_never',
+    'smoking_history_not current'
+]
+
+
+class DiabetesMLService:
+    _instance = None
+    _model = None
+
+    def __init__(self):
+        self._load_model()
+
+    @classmethod
+    def get_instance(cls) -> "DiabetesMLService":
+        if cls._instance is None:
+            cls._instance = DiabetesMLService()
+        return cls._instance
+
+    def _resolve_model_path(self) -> Path:
+        base_dir = Path(__file__).resolve().parent.parent.parent
+        primary_path = base_dir / "models" / "diabetes_model.pkl"
+        fallback_path = Path(r"C:\Users\HRISHIKESH\Downloads\diabetes_model (1).pkl")
+
+        if primary_path.exists():
+            return primary_path
+        if fallback_path.exists():
+            return fallback_path
+        raise FileNotFoundError(
+            f"Diabetes ML model file not found at {primary_path} or {fallback_path}"
+        )
+
+    def _load_model(self):
+        try:
+            model_path = self._resolve_model_path()
+            logger.info("Loading Diabetes ML model from %s", model_path)
+            loaded_obj = joblib.load(model_path)
+            if isinstance(loaded_obj, dict) and 'model' in loaded_obj:
+                self._model = loaded_obj['model']
+            else:
+                self._model = loaded_obj
+            logger.info("Diabetes ML model loaded successfully.")
+        except Exception as e:
+            logger.error("Error loading diabetes model: %s", e)
+            raise
+
+    def build_feature_vector(self, req: DiabetesPredictionRequest) -> np.ndarray:
+        gender_male = 1 if req.gender == GenderEnum.male else 0
+        gender_other = 1 if req.gender == GenderEnum.other else 0
+
+        smoking_current = 1 if req.smoking_history == SmokingHistoryEnum.current else 0
+        smoking_ever = 1 if req.smoking_history == SmokingHistoryEnum.ever else 0
+        smoking_former = 1 if req.smoking_history == SmokingHistoryEnum.former else 0
+        smoking_never = 1 if req.smoking_history == SmokingHistoryEnum.never else 0
+        smoking_not_current = 1 if req.smoking_history == SmokingHistoryEnum.not_current else 0
+
+        vector = [
+            float(req.age),
+            1 if req.hypertension else 0,
+            1 if req.heart_disease else 0,
+            float(req.bmi),
+            float(req.hba1c_level),
+            float(req.blood_glucose_level),
+            gender_male,
+            gender_other,
+            smoking_current,
+            smoking_ever,
+            smoking_former,
+            smoking_never,
+            smoking_not_current
+        ]
+        return np.array([vector], dtype=np.float64)
+
+    def generate_recommendations(
+        self,
+        req: DiabetesPredictionRequest,
+        prediction: int,
+        prob_positive: float
+    ) -> List[str]:
+        recommendations = []
+
+        if prediction == 1 or prob_positive >= 0.5:
+            recommendations.append("High probability of diabetes detected. Schedule a formal diagnostic oral glucose tolerance test with your healthcare provider.")
+        elif prob_positive >= 0.25:
+            recommendations.append("Moderate risk detected. Regular monitoring and preventive lifestyle modifications are strongly advised.")
+        else:
+            recommendations.append("Low risk of diabetes detected. Continue regular annual preventive health check-ups.")
+
+        if req.hba1c_level >= 6.5:
+            recommendations.append(f"HbA1c level of {req.hba1c_level}% is in the diabetic threshold (>= 6.5%). Medical evaluation is recommended.")
+        elif req.hba1c_level >= 5.7:
+            recommendations.append(f"HbA1c level of {req.hba1c_level}% indicates pre-diabetes range (5.7% - 6.4%). Dietary intervention is advised.")
+
+        if req.blood_glucose_level >= 140.0:
+            recommendations.append(f"Blood glucose reading of {req.blood_glucose_level} mg/dL is elevated. Maintain a regular fasting log.")
+
+        if req.bmi >= 30.0:
+            recommendations.append(f"BMI of {req.bmi:.1f} classifies as obese. A supervised nutritional and exercise plan can drastically improve metabolic sensitivity.")
+        elif req.bmi >= 25.0:
+            recommendations.append(f"BMI of {req.bmi:.1f} classifies as overweight. Maintaining a calorie-balanced diet is recommended.")
+
+        if req.hypertension or req.heart_disease:
+            recommendations.append("Cardiovascular comorbidity present. Coordinate care with your cardiologist/physician for dual lipid and glycemic control.")
+
+        if req.smoking_history in (SmokingHistoryEnum.current, SmokingHistoryEnum.ever):
+            recommendations.append("Smoking significantly increases microvascular complication risks. Smoking cessation counseling is strongly recommended.")
+
+        return recommendations
+
+    def predict(self, req: DiabetesPredictionRequest) -> DiabetesPredictionResponse:
+        if self._model is None:
+            self._load_model()
+
+        feature_vector = self.build_feature_vector(req)
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            pred = int(self._model.predict(feature_vector)[0])
+            prob_matrix = self._model.predict_proba(feature_vector)
+        prob_positive = float(prob_matrix[0][1])
+
+        risk_label = "High Risk" if (pred == 1 or prob_positive >= 0.5) else "Low Risk"
+        risk_pct = round(prob_positive * 100.0, 1)
+
+        # Confidence metric
+        if prob_positive >= 0.8 or prob_positive <= 0.2:
+            confidence = "High Confidence"
+        elif prob_positive >= 0.65 or prob_positive <= 0.35:
+            confidence = "Moderate Confidence"
+        else:
+            confidence = "Low Confidence (Borderline)"
+
+        recommendations = self.generate_recommendations(req, pred, prob_positive)
+
+        return DiabetesPredictionResponse(
+            prediction=pred,
+            risk_label=risk_label,
+            risk_probability=round(prob_positive, 4),
+            risk_percentage=risk_pct,
+            confidence_level=confidence,
+            feature_summary={
+                "age": req.age,
+                "gender": req.gender.value,
+                "bmi": req.bmi,
+                "hba1c_level": req.hba1c_level,
+                "blood_glucose_level": req.blood_glucose_level,
+                "hypertension": req.hypertension,
+                "heart_disease": req.heart_disease,
+                "smoking_history": req.smoking_history.value
+            },
+            recommendations=recommendations
+        )
+
+
+ml_service = DiabetesMLService.get_instance()
