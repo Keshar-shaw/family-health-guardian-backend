@@ -4,6 +4,7 @@ import logging
 from typing import Optional, Tuple, List
 import joblib
 import numpy as np
+import pandas as pd
 
 from app.schemas.ml_prediction import (
     DiabetesPredictionRequest,
@@ -14,7 +15,7 @@ from app.schemas.ml_prediction import (
 
 logger = logging.getLogger(__name__)
 
-# Expected model features in order
+# Expected model features in order derived from training notebook and model artifact
 EXPECTED_FEATURES = [
     'age',
     'hypertension',
@@ -76,32 +77,53 @@ class DiabetesMLService:
             logger.error("Error loading diabetes model: %s", e)
             raise
 
-    def build_feature_vector(self, req: DiabetesPredictionRequest) -> np.ndarray:
+    def get_expected_features(self) -> List[str]:
+        """Derive expected feature names and ordering directly from the trained model."""
+        if self._model is not None and hasattr(self._model, "feature_names_in_"):
+            return list(self._model.feature_names_in_)
+        return list(EXPECTED_FEATURES)
+
+    def build_feature_dataframe(self, req: DiabetesPredictionRequest) -> pd.DataFrame:
+        """
+        Construct a 1-row pandas DataFrame using the exact feature names and ordering
+        expected by the trained RandomForestClassifier.
+        Categorical dummy encoding matches the training get_dummies(drop_first=True) step.
+        """
+        features = self.get_expected_features()
+
+        # Gender: 'Female' dropped as baseline in training drop_first=True
         gender_male = 1 if req.gender == GenderEnum.male else 0
         gender_other = 1 if req.gender == GenderEnum.other else 0
 
+        # Smoking History: 'No Info' dropped as baseline in training drop_first=True
         smoking_current = 1 if req.smoking_history == SmokingHistoryEnum.current else 0
         smoking_ever = 1 if req.smoking_history == SmokingHistoryEnum.ever else 0
         smoking_former = 1 if req.smoking_history == SmokingHistoryEnum.former else 0
         smoking_never = 1 if req.smoking_history == SmokingHistoryEnum.never else 0
         smoking_not_current = 1 if req.smoking_history == SmokingHistoryEnum.not_current else 0
 
-        vector = [
-            float(req.age),
-            1 if req.hypertension else 0,
-            1 if req.heart_disease else 0,
-            float(req.bmi),
-            float(req.hba1c_level),
-            float(req.blood_glucose_level),
-            gender_male,
-            gender_other,
-            smoking_current,
-            smoking_ever,
-            smoking_former,
-            smoking_never,
-            smoking_not_current
-        ]
-        return np.array([vector], dtype=np.float64)
+        data = {
+            'age': float(req.age),
+            'hypertension': 1 if req.hypertension else 0,
+            'heart_disease': 1 if req.heart_disease else 0,
+            'bmi': float(req.bmi),
+            'HbA1c_level': float(req.hba1c_level),
+            'blood_glucose_level': float(req.blood_glucose_level),
+            'gender_Male': gender_male,
+            'gender_Other': gender_other,
+            'smoking_history_current': smoking_current,
+            'smoking_history_ever': smoking_ever,
+            'smoking_history_former': smoking_former,
+            'smoking_history_never': smoking_never,
+            'smoking_history_not current': smoking_not_current
+        }
+
+        df = pd.DataFrame([data], columns=features)
+        return df
+
+    def build_feature_vector(self, req: DiabetesPredictionRequest) -> np.ndarray:
+        """Maintained for backward compatibility. Returns 2D float64 numpy array."""
+        return self.build_feature_dataframe(req).to_numpy(dtype=np.float64)
 
     def generate_recommendations(
         self,
@@ -142,14 +164,13 @@ class DiabetesMLService:
     def predict(self, req: DiabetesPredictionRequest) -> DiabetesPredictionResponse:
         if self._model is None:
             self._load_model()
+        if self._model is None:
+            raise RuntimeError("Diabetes ML model is not available")
 
-        feature_vector = self.build_feature_vector(req)
+        feature_df = self.build_feature_dataframe(req)
 
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=UserWarning)
-            pred = int(self._model.predict(feature_vector)[0])
-            prob_matrix = self._model.predict_proba(feature_vector)
+        pred = int(self._model.predict(feature_df)[0])
+        prob_matrix = self._model.predict_proba(feature_df)
         prob_positive = float(prob_matrix[0][1])
 
         risk_label = "High Risk" if (pred == 1 or prob_positive >= 0.5) else "Low Risk"

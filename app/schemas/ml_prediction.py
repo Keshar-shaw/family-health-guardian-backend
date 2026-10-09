@@ -16,6 +16,7 @@ class SmokingHistoryEnum(str, Enum):
     former = "former"
     ever = "ever"
     not_current = "not current"
+    no_info = "No Info"
 
 
 class DiabetesPredictionRequest(BaseModel):
@@ -29,6 +30,20 @@ class DiabetesPredictionRequest(BaseModel):
     blood_glucose_level: float = Field(..., ge=30.0, le=600.0, description="Blood glucose level in mg/dL")
     family_id: Optional[str] = Field(None, description="Optional Family UUID to associate record with")
     save_to_records: bool = Field(False, description="Whether to persist the result in health records")
+
+    @field_validator('age', 'bmi', 'hba1c_level', 'blood_glucose_level', mode='before')
+    @classmethod
+    def validate_numeric_measurement(cls, v, info):
+        if v is None:
+            raise ValueError(f"{info.field_name} is required and cannot be null or missing")
+        try:
+            val = float(v)
+        except (ValueError, TypeError):
+            raise ValueError(f"{info.field_name} must be a valid numeric measurement")
+        import math
+        if math.isnan(val) or math.isinf(val):
+            raise ValueError(f"{info.field_name} cannot be NaN or infinite")
+        return val
 
     @field_validator('gender', mode='before')
     @classmethod
@@ -48,8 +63,10 @@ class DiabetesPredictionRequest(BaseModel):
     def normalize_smoking(cls, v):
         if isinstance(v, str):
             v_clean = v.strip().lower().replace("_", " ")
+            if v_clean in ("no info", "no_info", "unknown", "na", "n/a"):
+                return SmokingHistoryEnum.no_info
             for item in SmokingHistoryEnum:
-                if item.value == v_clean:
+                if item.value.lower() == v_clean:
                     return item
         return v
 

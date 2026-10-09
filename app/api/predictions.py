@@ -21,17 +21,18 @@ router = APIRouter(prefix="/predictions", tags=["ML Predictions"])
 @router.get("/diabetes/metadata", response_model=Dict[str, Any])
 def get_diabetes_model_metadata():
     """Retrieve metadata, feature list, and expected ranges for the Diabetes ML model."""
+    expected_features = ml_service.get_expected_features()
     return {
         "model_name": "RandomForestClassifier",
         "disease_target": "Type 2 Diabetes Mellitus",
-        "features_count": len(EXPECTED_FEATURES),
-        "expected_features": EXPECTED_FEATURES,
+        "features_count": len(expected_features),
+        "expected_features": expected_features,
         "feature_details": {
             "age": {"type": "float", "range": "0 - 120", "description": "Patient age in years"},
             "gender": {"type": "string", "options": ["Male", "Female", "Other"]},
             "hypertension": {"type": "boolean", "description": "High blood pressure diagnosis"},
             "heart_disease": {"type": "boolean", "description": "Heart disease diagnosis"},
-            "smoking_history": {"type": "string", "options": ["never", "current", "former", "ever", "not current"]},
+            "smoking_history": {"type": "string", "options": ["never", "current", "former", "ever", "not current", "No Info"]},
             "bmi": {"type": "float", "normal_range": "18.5 - 24.9", "description": "Body Mass Index"},
             "hba1c_level": {"type": "float", "normal_range": "< 5.7%", "prediabetes": "5.7 - 6.4%", "diabetes": ">= 6.5%"},
             "blood_glucose_level": {"type": "float", "normal_fasting": "70 - 99 mg/dL", "diabetes": ">= 126 mg/dL fasting"}
