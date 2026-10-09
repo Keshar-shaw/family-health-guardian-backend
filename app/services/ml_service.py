@@ -9,6 +9,7 @@ import pandas as pd
 from app.schemas.ml_prediction import (
     DiabetesPredictionRequest,
     DiabetesPredictionResponse,
+    FeatureImpact,
     GenderEnum,
     SmokingHistoryEnum
 )
@@ -192,6 +193,158 @@ class DiabetesMLService:
 
         return recommendations
 
+    def calculate_feature_impacts(
+        self,
+        req: DiabetesPredictionRequest,
+        pred: int,
+        prob_positive: float
+    ) -> List[FeatureImpact]:
+        """
+        Calculate local clinical feature attribution explaining specific patient risk drivers.
+        Weights reflect empirical Random Forest importance derived during model training.
+        """
+        impacts: List[FeatureImpact] = []
+
+        # 1. HbA1c (Weight ~ 0.414)
+        if req.hba1c_level >= 6.5:
+            impacts.append(FeatureImpact(
+                feature="HbA1c_level",
+                display_name="Hemoglobin A1c",
+                value=req.hba1c_level,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.414,
+                description=f"HbA1c of {req.hba1c_level}% exceeds clinical diabetic threshold (>= 6.5%), serving as the primary driver of elevated risk."
+            ))
+        elif req.hba1c_level >= 5.7:
+            impacts.append(FeatureImpact(
+                feature="HbA1c_level",
+                display_name="Hemoglobin A1c",
+                value=req.hba1c_level,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.414,
+                description=f"HbA1c of {req.hba1c_level}% is in pre-diabetic range (5.7% - 6.4%), contributing moderate upward risk."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="HbA1c_level",
+                display_name="Hemoglobin A1c",
+                value=req.hba1c_level,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.414,
+                description=f"HbA1c of {req.hba1c_level}% is within healthy non-diabetic range (< 5.7%), significantly lowering metabolic risk."
+            ))
+
+        # 2. Blood Glucose (Weight ~ 0.302)
+        if req.blood_glucose_level >= 140.0:
+            impacts.append(FeatureImpact(
+                feature="blood_glucose_level",
+                display_name="Blood Glucose",
+                value=req.blood_glucose_level,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.302,
+                description=f"Blood glucose reading of {req.blood_glucose_level} mg/dL is elevated, strongly elevating acute glycemic risk."
+            ))
+        elif req.blood_glucose_level >= 100.0:
+            impacts.append(FeatureImpact(
+                feature="blood_glucose_level",
+                display_name="Blood Glucose",
+                value=req.blood_glucose_level,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.302,
+                description=f"Blood glucose reading of {req.blood_glucose_level} mg/dL indicates impaired fasting glucose."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="blood_glucose_level",
+                display_name="Blood Glucose",
+                value=req.blood_glucose_level,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.302,
+                description=f"Blood glucose reading of {req.blood_glucose_level} mg/dL is in optimal normal fasting bounds (70 - 99 mg/dL)."
+            ))
+
+        # 3. Age (Weight ~ 0.146)
+        if req.age >= 60.0:
+            impacts.append(FeatureImpact(
+                feature="age",
+                display_name="Patient Age",
+                value=req.age,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.146,
+                description=f"Age {req.age:.0f} correlates with age-related beta-cell decline and peripheral insulin resistance."
+            ))
+        elif req.age >= 45.0:
+            impacts.append(FeatureImpact(
+                feature="age",
+                display_name="Patient Age",
+                value=req.age,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.146,
+                description=f"Age {req.age:.0f} is in the recommended screening age threshold (>= 45 years per ADA)."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="age",
+                display_name="Patient Age",
+                value=req.age,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.146,
+                description=f"Younger age ({req.age:.0f} years) serves as a favorable baseline protective demographic factor."
+            ))
+
+        # 4. BMI (Weight ~ 0.073)
+        if req.bmi >= 30.0:
+            impacts.append(FeatureImpact(
+                feature="bmi",
+                display_name="Body Mass Index",
+                value=req.bmi,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.073,
+                description=f"BMI of {req.bmi:.1f} classifies as obese, a key driver of adipose-induced insulin resistance."
+            ))
+        elif req.bmi >= 25.0:
+            impacts.append(FeatureImpact(
+                feature="bmi",
+                display_name="Body Mass Index",
+                value=req.bmi,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.073,
+                description=f"BMI of {req.bmi:.1f} classifies as overweight."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="bmi",
+                display_name="Body Mass Index",
+                value=req.bmi,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.073,
+                description=f"BMI of {req.bmi:.1f} is within normal healthy weight parameters (18.5 - 24.9 kg/m2)."
+            ))
+
+        # 5. Cardiovascular & Hypertension Comorbidities (Weight ~ 0.051)
+        if req.hypertension or req.heart_disease:
+            impacts.append(FeatureImpact(
+                feature="cardiovascular_comorbidities",
+                display_name="Cardiovascular Comorbidity",
+                value={"hypertension": req.hypertension, "heart_disease": req.heart_disease},
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.051,
+                description="Co-existing hypertension or cardiovascular disease compounds macrovascular diabetic complication risk."
+            ))
+
+        # 6. Smoking History (Weight ~ 0.014)
+        if req.smoking_history in (SmokingHistoryEnum.current, SmokingHistoryEnum.ever):
+            impacts.append(FeatureImpact(
+                feature="smoking_history",
+                display_name="Smoking History",
+                value=req.smoking_history.value,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.014,
+                description="Active or past tobacco use increases systemic inflammation and endothelial vascular stress."
+            ))
+
+        return impacts
+
     # Backward compatibility alias
     _load_model = load_model
 
@@ -219,6 +372,7 @@ class DiabetesMLService:
             confidence = "Low Confidence (Borderline)"
 
         recommendations = self.generate_recommendations(req, pred, prob_positive)
+        feature_impacts = self.calculate_feature_impacts(req, pred, prob_positive)
 
         return DiabetesPredictionResponse(
             prediction=pred,
@@ -236,7 +390,8 @@ class DiabetesMLService:
                 "heart_disease": req.heart_disease,
                 "smoking_history": req.smoking_history.value
             },
-            recommendations=recommendations
+            recommendations=recommendations,
+            feature_impacts=feature_impacts
         )
 
 

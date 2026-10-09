@@ -647,3 +647,113 @@ def test_hypertension_auth_expired_or_invalid_tokens_rejected(client):
     # Malformed token
     res_bad = client.post("/api/v1/predictions/hypertension", json=payload, headers={"Authorization": "Bearer malformed.jwt.token"})
     assert res_bad.status_code == 401
+
+
+def test_hypertension_feature_impacts_explainability(client, auth_headers):
+    """Verify feature impacts are calculated and returned with clinical explainability metadata."""
+    payload = {
+        "age": 68.0,
+        "gender": "Male",
+        "heart_disease": True,
+        "smoking_history": "former",
+        "bmi": 33.2,
+        "hba1c_level": 7.0,
+        "blood_glucose_level": 175.0,
+        "diabetes": True
+    }
+    with patch("app.services.audit.AuditService.log_action"):
+        res = client.post("/api/v1/predictions/hypertension", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "feature_impacts" in data
+        assert len(data["feature_impacts"]) >= 5
+        impact_features = [f["feature"] for f in data["feature_impacts"]]
+        assert "age" in impact_features
+        assert "bmi" in impact_features
+        assert "diabetes" in impact_features
+        # Check relative weights sum to 1.0 approximately
+        total_weight = sum(f["relative_weight"] for f in data["feature_impacts"])
+        assert 0.99 <= total_weight <= 1.01
+        for item in data["feature_impacts"]:
+            assert item["impact_level"] in ["HIGH_RISK_FACTOR", "MODERATE_RISK_FACTOR", "PROTECTIVE_FACTOR", "NEUTRAL"]
+            assert len(item["description"]) > 5
+
+
+def test_automated_hypertension_high_risk_notification_dispatched(client, auth_headers, test_user_id):
+    """Verify high-risk hypertension assessment (>= 75%) automatically triggers an emergency notification."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    family_id = str(uuid.uuid4())
+    member_id = str(uuid.uuid4())
+    admin_user_id = str(uuid.uuid4())
+
+    created_notifications = []
+    mock_supabase = MagicMock()
+
+    def get_table(name):
+        builder = MagicMock()
+        if name == "family_members":
+            mock_res = MagicMock()
+            mock_res.data = [
+                {"id": member_id, "family_id": family_id, "user_id": test_user_id, "role": "MEMBER"},
+                {"id": str(uuid.uuid4()), "family_id": family_id, "user_id": admin_user_id, "role": "ADMIN"}
+            ]
+            exec_mock = MagicMock()
+            exec_mock.execute.return_value = mock_res
+            builder.select.return_value.eq.return_value.eq.return_value = exec_mock
+            builder.select.return_value.eq.return_value = exec_mock
+            return builder
+        elif name == "prediction_history":
+            def insert_record(payload):
+                p = dict(payload)
+                p["id"] = str(uuid.uuid4())
+                mock_res = MagicMock()
+                mock_res.data = [p]
+                exec_mock = MagicMock()
+                exec_mock.execute.return_value = mock_res
+                return exec_mock
+            builder.insert.side_effect = insert_record
+            return builder
+        elif name == "notifications":
+            def insert_notif(payload):
+                created_notifications.append(payload)
+                mock_res = MagicMock()
+                p = dict(payload)
+                p["id"] = str(uuid.uuid4())
+                mock_res.data = [p]
+                exec_mock = MagicMock()
+                exec_mock.execute.return_value = mock_res
+                return exec_mock
+            builder.insert.side_effect = insert_notif
+            return builder
+        return builder
+
+    mock_supabase.table.side_effect = get_table
+    app.dependency_overrides[get_supabase] = lambda: mock_supabase
+
+    payload = {
+        "age": 78.0,
+        "gender": "Male",
+        "heart_disease": True,
+        "smoking_history": "former",
+        "bmi": 36.0,
+        "hba1c_level": 8.5,
+        "blood_glucose_level": 220.0,
+        "diabetes": True,
+        "family_id": family_id,
+        "family_member_id": member_id,
+        "save_to_records": True
+    }
+
+    with patch("app.services.audit.AuditService.log_action"):
+        res = client.post("/api/v1/predictions/hypertension", json=payload, headers=auth_headers)
+        app.dependency_overrides.clear()
+
+        assert res.status_code == 200
+        assert res.json()["prediction"] == 1
+        assert res.json()["risk_percentage"] >= 70.0
+        assert len(created_notifications) > 0
+        notif = created_notifications[0]
+        assert "Critical Health Alert" in notif["title"]
+

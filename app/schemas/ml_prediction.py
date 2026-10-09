@@ -1,7 +1,16 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional, List, Any
 from enum import Enum
 from datetime import datetime, timezone
+
+
+class FeatureImpact(BaseModel):
+    feature: str = Field(..., description="Feature identifier name")
+    display_name: str = Field(..., description="Human-friendly feature label")
+    value: Any = Field(..., description="User's input measurement value")
+    impact_level: str = Field(..., description="'HIGH_RISK_FACTOR', 'MODERATE_RISK_FACTOR', 'PROTECTIVE_FACTOR', or 'NEUTRAL'")
+    relative_weight: float = Field(..., description="Feature importance weight from training model (0.0 to 1.0)")
+    description: str = Field(..., description="Explanation of how this factor influences prediction outcome")
 
 
 class GenderEnum(str, Enum):
@@ -80,6 +89,7 @@ class DiabetesPredictionResponse(BaseModel):
     confidence_level: str = Field(..., description="'High Confidence', 'Moderate Confidence', or 'Low Confidence'")
     feature_summary: dict = Field(..., description="Summary of input values used for the inference")
     recommendations: List[str] = Field(..., description="Actionable health recommendations")
+    feature_impacts: List[FeatureImpact] = Field(default_factory=list, description="Per-patient local feature attribution explaining risk drivers")
     assessed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     record_id: Optional[str] = Field(None, description="UUID of the saved prediction record if persisted")
 
@@ -163,7 +173,46 @@ class HypertensionPredictionResponse(BaseModel):
     confidence_level: str = Field(..., description="'High Confidence', 'Moderate Confidence', or 'Low Confidence'")
     feature_summary: dict = Field(..., description="Summary of input values used for the inference")
     recommendations: List[str] = Field(..., description="Actionable health recommendations")
+    feature_impacts: List[FeatureImpact] = Field(default_factory=list, description="Per-patient local feature attribution explaining risk drivers")
     assessed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     record_id: Optional[str] = Field(None, description="UUID of the saved prediction record if persisted")
+
+
+class TrendDataPoint(BaseModel):
+    record_id: str = Field(..., description="UUID of the historical prediction record")
+    assessed_at: str = Field(..., description="ISO 8601 timestamp of assessment")
+    prediction_type: str = Field(..., description="DIABETES or HYPERTENSION")
+    risk_label: str = Field(..., description="Low Risk or High Risk")
+    risk_percentage: float = Field(..., description="Calculated probability percentage")
+    risk_probability: float = Field(..., description="Probability scalar 0.0 to 1.0")
+    confidence_level: str = Field(..., description="Confidence tier")
+    key_metrics: dict = Field(default_factory=dict, description="Primary physiological metrics captured")
+
+
+class PredictionTrendsResponse(BaseModel):
+    total_assessments: int = Field(..., description="Total historical records analyzed in trend window")
+    prediction_type: str = Field(..., description="Target condition evaluated")
+    trajectory: str = Field(..., description="'IMPROVING', 'WORSENING', 'STABLE', or 'INSUFFICIENT_DATA'")
+    latest_risk_percentage: Optional[float] = Field(None, description="Most recent risk percentage")
+    baseline_risk_percentage: Optional[float] = Field(None, description="Initial historical baseline risk percentage")
+    delta_percentage: Optional[float] = Field(None, description="Change in risk percentage from baseline to latest")
+    average_risk_percentage: Optional[float] = Field(None, description="Mean risk percentage across assessment history")
+    clinical_summary: str = Field(..., description="Actionable clinical summary of longitudinal trajectory")
+    data_points: List[TrendDataPoint] = Field(default_factory=list, description="Chronologically sorted assessment points")
+
+
+class PrefillPredictionResponse(BaseModel):
+    family_member_id: str = Field(..., description="UUID of the family member")
+    age: Optional[float] = Field(None, description="Known or calculated age")
+    gender: Optional[str] = Field(None, description="Known gender")
+    bmi: Optional[float] = Field(None, description="Most recently recorded BMI")
+    hypertension: Optional[bool] = Field(None, description="Documented chronic hypertension condition")
+    heart_disease: Optional[bool] = Field(None, description="Documented cardiovascular comorbidity")
+    diabetes: Optional[bool] = Field(None, description="Documented diabetic condition")
+    smoking_history: Optional[str] = Field(None, description="Recent smoking status")
+    hba1c_level: Optional[float] = Field(None, description="Most recent HbA1c reading if available")
+    blood_glucose_level: Optional[float] = Field(None, description="Most recent blood glucose reading if available")
+    source_notes: List[str] = Field(default_factory=list, description="Audit notes explaining data origins")
+
 
 

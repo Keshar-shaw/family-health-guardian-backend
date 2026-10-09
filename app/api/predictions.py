@@ -10,12 +10,17 @@ from app.schemas.ml_prediction import (
     DiabetesPredictionResponse,
     HypertensionPredictionRequest,
     HypertensionPredictionResponse,
-    PredictionHistoryResponse
+    PredictionHistoryResponse,
+    PredictionTrendsResponse,
+    TrendDataPoint,
+    PrefillPredictionResponse
 )
 from app.services.ml_service import ml_service, EXPECTED_FEATURES
 from app.services.hypertension_service import hypertension_ml_service, EXPECTED_HYPERTENSION_FEATURES
 from app.services.audit import AuditService
 from app.schemas.audit_log import AuditAction, AuditResourceType
+from app.services.notifications import NotificationService
+from app.schemas.notification import NotificationType
 from app.api.health_records import verify_member_access
 from supabase import Client
 
@@ -195,6 +200,27 @@ def predict_diabetes_risk(
                 "confidence_level": result.confidence_level
             }
         )
+
+        # Automated Alert Notification on Critical Risk (>= 75%)
+        if result.prediction == 1 and result.risk_percentage >= 75.0 and target_member_id_str:
+            try:
+                recipient_user_ids = {current_user.sub}
+                if family_id_str:
+                    fm_admins = supabase.table("family_members").select("user_id").eq("family_id", family_id_str).eq("role", "ADMIN").execute()
+                    if fm_admins.data:
+                        recipient_user_ids.update(a["user_id"] for a in fm_admins.data)
+                for uid in recipient_user_ids:
+                    NotificationService.create_notification(
+                        supabase=supabase,
+                        user_id=uid,
+                        family_member_id=target_member_id_str,
+                        notification_type=NotificationType.EMERGENCY_SOS,
+                        title=f"Critical Health Alert: {result.risk_label} Diabetes Risk ({result.risk_percentage}%)",
+                        message=f"High risk detected ({result.risk_percentage}%) in diabetes assessment. Timely clinical consultation recommended.",
+                        dispatch_immediately=True
+                    )
+            except Exception as notif_err:
+                logger.warning("Could not create high risk alert notification: %s", notif_err)
     else:
         # Audit log pure inference without saving measurements to history
         AuditService.log_action(
@@ -369,6 +395,27 @@ def predict_hypertension_risk(
                 "confidence_level": result.confidence_level
             }
         )
+
+        # Automated Alert Notification on Critical Risk (>= 70%)
+        if result.prediction == 1 and result.risk_percentage >= 70.0 and target_member_id_str:
+            try:
+                recipient_user_ids = {current_user.sub}
+                if family_id_str:
+                    fm_admins = supabase.table("family_members").select("user_id").eq("family_id", family_id_str).eq("role", "ADMIN").execute()
+                    if fm_admins.data:
+                        recipient_user_ids.update(a["user_id"] for a in fm_admins.data)
+                for uid in recipient_user_ids:
+                    NotificationService.create_notification(
+                        supabase=supabase,
+                        user_id=uid,
+                        family_member_id=target_member_id_str,
+                        notification_type=NotificationType.EMERGENCY_SOS,
+                        title=f"Critical Health Alert: {result.risk_label} Hypertension Risk ({result.risk_percentage}%)",
+                        message=f"High risk detected ({result.risk_percentage}%) in hypertension assessment. Timely clinical consultation recommended.",
+                        dispatch_immediately=True
+                    )
+            except Exception as notif_err:
+                logger.warning("Could not create high risk alert notification: %s", notif_err)
     else:
         # Audit log pure inference without saving measurements to history
         AuditService.log_action(
@@ -512,4 +559,197 @@ def delete_prediction_history_record(
 
     supabase.table("prediction_history").delete().eq("id", str(record_id)).execute()
     return None
+
+
+@router.get("/trends", response_model=PredictionTrendsResponse)
+def get_prediction_trends(
+    family_member_id: Optional[UUID] = None,
+    family_id: Optional[UUID] = None,
+    prediction_type: str = "DIABETES",
+    limit: int = 30,
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Compute longitudinal risk trajectory analytics and clinical trend summaries across historical assessments.
+    Enforces family and member authorization.
+    """
+    if family_id:
+        fm_check = supabase.table("family_members") \
+            .select("*") \
+            .eq("family_id", str(family_id)) \
+            .eq("user_id", current_user.sub) \
+            .execute()
+        if not fm_check.data:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: you are not a member of this family"
+            )
+
+    if family_member_id:
+        verify_member_access(
+            supabase=supabase,
+            family_member_id=family_member_id,
+            user_id=current_user.sub,
+            require_full_access=False
+        )
+
+    # Query chronological history
+    query = supabase.table("prediction_history") \
+        .select("*") \
+        .eq("prediction_type", prediction_type.upper())
+
+    if family_member_id:
+        query = query.eq("family_member_id", str(family_member_id))
+    elif family_id:
+        query = query.eq("family_id", str(family_id))
+    else:
+        query = query.eq("user_id", current_user.sub)
+
+    res = query.order("created_at", desc=False).range(0, limit - 1).execute()
+    records = res.data or []
+
+    data_points: List[TrendDataPoint] = []
+    for r in records:
+        data_points.append(TrendDataPoint(
+            record_id=str(r["id"]),
+            assessed_at=r["created_at"],
+            prediction_type=r["prediction_type"],
+            risk_label=r["risk_label"],
+            risk_percentage=float(r["risk_percentage"]),
+            risk_probability=float(r["risk_probability"]),
+            confidence_level=r.get("confidence_level", "Moderate Confidence"),
+            key_metrics=r.get("input_measurements", {})
+        ))
+
+    total = len(data_points)
+    if total < 2:
+        trajectory = "INSUFFICIENT_DATA"
+        latest = data_points[0].risk_percentage if total == 1 else None
+        baseline = latest
+        delta = 0.0 if total == 1 else None
+        avg_risk = latest
+        summary = (
+            f"1 historical assessment found ({latest:.1f}% risk). "
+            "At least 2 longitudinal assessments are required to calculate a trajectory trend."
+            if total == 1 else
+            "No historical assessments recorded yet for this profile."
+        )
+    else:
+        baseline = data_points[0].risk_percentage
+        latest = data_points[-1].risk_percentage
+        delta = round(latest - baseline, 1)
+        avg_risk = round(sum(d.risk_percentage for d in data_points) / total, 1)
+
+        if delta <= -5.0:
+            trajectory = "IMPROVING"
+            summary = (
+                f"Favorable clinical improvement: statistical risk has decreased by {abs(delta):.1f}% "
+                f"(from {baseline:.1f}% baseline down to {latest:.1f}%). "
+                "Current preventive lifestyle modifications are yielding positive health benefits."
+            )
+        elif delta >= 5.0:
+            trajectory = "WORSENING"
+            summary = (
+                f"Elevating risk trajectory: statistical risk has increased by +{delta:.1f}% "
+                f"(from {baseline:.1f}% baseline up to {latest:.1f}%). "
+                "Coordinated clinical review and diagnostic laboratory tests are recommended."
+            )
+        else:
+            trajectory = "STABLE"
+            summary = (
+                f"Stable health trajectory: risk remains consistent around {avg_risk:.1f}% "
+                f"(latest: {latest:.1f}%, baseline: {baseline:.1f}%, delta: {delta:+.1f}%). "
+                "Continue standard periodic preventive tracking."
+            )
+
+    return PredictionTrendsResponse(
+        total_assessments=total,
+        prediction_type=prediction_type.upper(),
+        trajectory=trajectory,
+        latest_risk_percentage=latest,
+        baseline_risk_percentage=baseline,
+        delta_percentage=delta,
+        average_risk_percentage=avg_risk,
+        clinical_summary=summary,
+        data_points=data_points
+    )
+
+
+@router.get("/prefill/{family_member_id}", response_model=PrefillPredictionResponse)
+def prefill_prediction_measurements(
+    family_member_id: UUID,
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Intelligently pre-populate health metrics for a family member by aggregating known
+    health records, chronic conditions, and recent assessment history.
+    Enforces read access authorization.
+    """
+    member = verify_member_access(
+        supabase=supabase,
+        family_member_id=family_member_id,
+        user_id=current_user.sub,
+        require_full_access=False
+    )
+
+    notes: List[str] = []
+    prefill = {
+        "family_member_id": str(family_member_id),
+        "age": None,
+        "gender": None,
+        "bmi": None,
+        "hypertension": None,
+        "heart_disease": None,
+        "diabetes": None,
+        "smoking_history": None,
+        "hba1c_level": None,
+        "blood_glucose_level": None,
+        "source_notes": notes
+    }
+
+    # 1. Inspect existing health_records
+    hr_res = supabase.table("health_records") \
+        .select("*") \
+        .eq("family_member_id", str(family_member_id)) \
+        .execute()
+
+    if hr_res.data:
+        hr = hr_res.data[0]
+        conditions = f"{hr.get('chronic_conditions') or ''} {hr.get('medical_history') or ''} {hr.get('current_conditions') or ''}".lower()
+        
+        if any(w in conditions for w in ["hypertension", "high blood pressure", "htn"]):
+            prefill["hypertension"] = True
+            notes.append("Hypertension diagnosed in chronic conditions record.")
+            
+        if any(w in conditions for w in ["heart disease", "coronary", "cardiac", "infarction"]):
+            prefill["heart_disease"] = True
+            notes.append("Cardiovascular pathology documented in medical history.")
+            
+        if any(w in conditions for w in ["diabetes", "diabetic", "t2d", "t1d"]):
+            prefill["diabetes"] = True
+            notes.append("Diabetes documented in chronic health record.")
+
+    # 2. Inspect latest prediction_history for physical vitals
+    ph_res = supabase.table("prediction_history") \
+        .select("*") \
+        .eq("family_member_id", str(family_member_id)) \
+        .order("created_at", desc=True) \
+        .range(0, 0) \
+        .execute()
+
+    if ph_res.data:
+        last_measurements = ph_res.data[0].get("input_measurements", {})
+        for k in ["age", "gender", "bmi", "smoking_history", "hba1c_level", "blood_glucose_level"]:
+            if k in last_measurements and last_measurements[k] is not None:
+                prefill[k] = last_measurements[k]
+        created_str = ph_res.data[0].get("created_at", "")[:10]
+        notes.append(f"Physical measurements auto-filled from recent assessment on {created_str}.")
+
+    if not notes:
+        notes.append("No previous health records or assessments found; blank profile initialized.")
+
+    return PrefillPredictionResponse(**prefill)
+
 

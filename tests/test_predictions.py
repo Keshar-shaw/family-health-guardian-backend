@@ -1004,3 +1004,223 @@ def test_model_deserialization_error_handled_gracefully(client, auth_headers):
         assert res.status_code == 503
         assert "Diabetes ML service is unavailable" in res.json()["detail"]
 
+
+def test_diabetes_feature_impacts_explainability(client, auth_headers):
+    """Verify local clinical feature attribution explainability returned in response."""
+    payload = {
+        "age": 68.0,
+        "gender": "Male",
+        "hypertension": True,
+        "heart_disease": True,
+        "smoking_history": "former",
+        "bmi": 32.5,
+        "hba1c_level": 7.8,
+        "blood_glucose_level": 190.0,
+        "save_to_records": False
+    }
+
+    with patch("app.services.audit.AuditService.log_action"):
+        res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "feature_impacts" in data
+        impacts = data["feature_impacts"]
+        assert len(impacts) >= 4
+
+        # Check key drivers
+        hba1c_impact = next((i for i in impacts if i["feature"] == "HbA1c_level"), None)
+        assert hba1c_impact is not None
+        assert hba1c_impact["impact_level"] == "HIGH_RISK_FACTOR"
+        assert hba1c_impact["relative_weight"] > 0.3
+
+        bmi_impact = next((i for i in impacts if i["feature"] == "bmi"), None)
+        assert bmi_impact is not None
+        assert bmi_impact["impact_level"] == "HIGH_RISK_FACTOR"
+
+
+def test_prediction_trends_trajectory_analysis(client, auth_headers, test_user_id):
+    """Verify longitudinal risk trajectory calculation across multiple historical points."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    p1 = {
+        "id": str(uuid.uuid4()),
+        "user_id": test_user_id,
+        "family_id": None,
+        "family_member_id": None,
+        "prediction_type": "DIABETES",
+        "prediction_result": 1,
+        "risk_label": "High Risk",
+        "risk_percentage": 88.0,
+        "risk_probability": 0.88,
+        "confidence_level": "High Confidence",
+        "input_measurements": {"age": 55, "bmi": 32},
+        "created_at": "2026-01-10T10:00:00Z"
+    }
+    p2 = {
+        "id": str(uuid.uuid4()),
+        "user_id": test_user_id,
+        "family_id": None,
+        "family_member_id": None,
+        "prediction_type": "DIABETES",
+        "prediction_result": 0,
+        "risk_label": "Low Risk",
+        "risk_percentage": 52.0,
+        "risk_probability": 0.52,
+        "confidence_level": "Moderate Confidence",
+        "input_measurements": {"age": 55, "bmi": 27},
+        "created_at": "2026-06-10T10:00:00Z"
+    }
+
+    mock_db = setup_mock_db({
+        "prediction_history": [p1, p2]
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    res = client.get("/api/v1/predictions/trends?prediction_type=DIABETES", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total_assessments"] == 2
+    assert data["trajectory"] == "IMPROVING"
+    assert data["baseline_risk_percentage"] == 88.0
+    assert data["latest_risk_percentage"] == 52.0
+    assert data["delta_percentage"] == -36.0
+    assert "Favorable clinical improvement" in data["clinical_summary"]
+    assert len(data["data_points"]) == 2
+
+
+def test_prefill_prediction_measurements_from_records(client, auth_headers, test_user_id):
+    """Verify prefill endpoint aggregates conditions from health_records and recent vitals."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    member_id = str(uuid.uuid4())
+    family_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_db({
+        "family_members": [{
+            "id": member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "health_records": [{
+            "id": str(uuid.uuid4()),
+            "family_member_id": member_id,
+            "chronic_conditions": "Essential Hypertension, Type 2 Diabetes",
+            "medical_history": "Coronary heart disease"
+        }],
+        "prediction_history": [{
+            "id": str(uuid.uuid4()),
+            "family_member_id": member_id,
+            "user_id": test_user_id,
+            "input_measurements": {
+                "age": 62.0,
+                "gender": "Male",
+                "bmi": 29.5,
+                "smoking_history": "former",
+                "hba1c_level": 6.8,
+                "blood_glucose_level": 140.0
+            },
+            "created_at": "2026-09-01T08:00:00Z"
+        }]
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    res = client.get(f"/api/v1/predictions/prefill/{member_id}", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["family_member_id"] == member_id
+    assert data["hypertension"] is True
+    assert data["diabetes"] is True
+    assert data["heart_disease"] is True
+    assert data["age"] == 62.0
+    assert data["bmi"] == 29.5
+    assert len(data["source_notes"]) >= 2
+
+
+def test_automated_high_risk_notification_dispatched(client, auth_headers, test_user_id):
+    """Verify high-risk assessment (>= 75%) automatically triggers a critical notification."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    family_id = str(uuid.uuid4())
+    member_id = str(uuid.uuid4())
+    admin_user_id = str(uuid.uuid4())
+
+    created_notifications = []
+
+    mock_supabase = MagicMock()
+
+    def get_table(name):
+        builder = MagicMock()
+        if name == "family_members":
+            # Return member membership and admin query
+            mock_res = MagicMock()
+            mock_res.data = [
+                {"id": member_id, "family_id": family_id, "user_id": test_user_id, "role": "MEMBER"},
+                {"id": str(uuid.uuid4()), "family_id": family_id, "user_id": admin_user_id, "role": "ADMIN"}
+            ]
+            exec_mock = MagicMock()
+            exec_mock.execute.return_value = mock_res
+            builder.select.return_value.eq.return_value.eq.return_value = exec_mock
+            builder.select.return_value.eq.return_value = exec_mock
+            return builder
+        elif name == "prediction_history":
+            def insert_record(payload):
+                p = dict(payload)
+                p["id"] = str(uuid.uuid4())
+                mock_res = MagicMock()
+                mock_res.data = [p]
+                exec_mock = MagicMock()
+                exec_mock.execute.return_value = mock_res
+                return exec_mock
+            builder.insert.side_effect = insert_record
+            return builder
+        elif name == "notifications":
+            def insert_notif(payload):
+                created_notifications.append(payload)
+                mock_res = MagicMock()
+                p = dict(payload)
+                p["id"] = str(uuid.uuid4())
+                mock_res.data = [p]
+                exec_mock = MagicMock()
+                exec_mock.execute.return_value = mock_res
+                return exec_mock
+            builder.insert.side_effect = insert_notif
+            return builder
+        return builder
+
+    mock_supabase.table.side_effect = get_table
+    app.dependency_overrides[get_supabase] = lambda: mock_supabase
+
+    payload = {
+        "age": 70.0,
+        "gender": "Male",
+        "hypertension": True,
+        "heart_disease": True,
+        "smoking_history": "former",
+        "bmi": 35.0,
+        "hba1c_level": 8.5,
+        "blood_glucose_level": 220.0,
+        "family_id": family_id,
+        "family_member_id": member_id,
+        "save_to_records": True
+    }
+
+    with patch("app.services.audit.AuditService.log_action"):
+        res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+        app.dependency_overrides.clear()
+
+        assert res.status_code == 200
+        assert res.json()["prediction"] == 1
+        assert res.json()["risk_percentage"] >= 75.0
+        assert len(created_notifications) > 0
+        notif = created_notifications[0]
+        assert "Critical Health Alert" in notif["title"]
+
+

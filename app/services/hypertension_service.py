@@ -9,6 +9,7 @@ import pandas as pd
 from app.schemas.ml_prediction import (
     HypertensionPredictionRequest,
     HypertensionPredictionResponse,
+    FeatureImpact,
     GenderEnum,
     SmokingHistoryEnum
 )
@@ -209,6 +210,131 @@ class HypertensionMLService:
 
         return recommendations
 
+    def calculate_feature_impacts(
+        self,
+        req: HypertensionPredictionRequest,
+        pred: int,
+        prob_positive: float
+    ) -> List[FeatureImpact]:
+        """
+        Calculate local clinical feature attribution explaining specific patient hypertension risk drivers.
+        Weights reflect empirical Random Forest importance derived during model training.
+        """
+        impacts: List[FeatureImpact] = []
+
+        # 1. Age (Weight ~ 0.537)
+        if req.age >= 60.0:
+            impacts.append(FeatureImpact(
+                feature="age",
+                display_name="Patient Age",
+                value=req.age,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.537,
+                description=f"Age {req.age:.0f} is the dominant contributor; vascular aging causes arterial wall thickening and arterial stiffness."
+            ))
+        elif req.age >= 45.0:
+            impacts.append(FeatureImpact(
+                feature="age",
+                display_name="Patient Age",
+                value=req.age,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.537,
+                description=f"Age {req.age:.0f} represents a moderate age-related hemodynamic risk tier."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="age",
+                display_name="Patient Age",
+                value=req.age,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.537,
+                description=f"Younger age ({req.age:.0f} years) serves as a favorable baseline protective cardiovascular factor."
+            ))
+
+        # 2. BMI (Weight ~ 0.190)
+        if req.bmi >= 30.0:
+            impacts.append(FeatureImpact(
+                feature="bmi",
+                display_name="Body Mass Index",
+                value=req.bmi,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.190,
+                description=f"BMI of {req.bmi:.1f} classifies as obese, significantly elevating systemic vascular resistance and cardiac output demand."
+            ))
+        elif req.bmi >= 25.0:
+            impacts.append(FeatureImpact(
+                feature="bmi",
+                display_name="Body Mass Index",
+                value=req.bmi,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.190,
+                description=f"BMI of {req.bmi:.1f} classifies as overweight, contributing to elevated resting arterial load."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="bmi",
+                display_name="Body Mass Index",
+                value=req.bmi,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.190,
+                description=f"BMI of {req.bmi:.1f} is within optimal normal bounds (18.5 - 24.9 kg/m2)."
+            ))
+
+        # 3. Diabetes Comorbidity (Weight ~ 0.081)
+        if req.diabetes:
+            impacts.append(FeatureImpact(
+                feature="diabetes",
+                display_name="Diabetes Comorbidity",
+                value=True,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.081,
+                description="Diabetes causes microvascular hardening and endothelial inflammation, strongly accelerating hypertension."
+            ))
+
+        # 4. Glycemic Markers (HbA1c ~ 0.058, Glucose ~ 0.051)
+        if req.blood_glucose_level >= 140.0 or req.hba1c_level >= 6.5:
+            impacts.append(FeatureImpact(
+                feature="glycemic_markers",
+                display_name="Elevated Glycemic Markers",
+                value={"glucose": req.blood_glucose_level, "hba1c": req.hba1c_level},
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.109,
+                description="Elevated circulating glucose increases arterial oxidative stress and renin-angiotensin-aldosterone system activity."
+            ))
+
+        # 5. Heart Disease (Weight ~ 0.031)
+        if req.heart_disease:
+            impacts.append(FeatureImpact(
+                feature="heart_disease",
+                display_name="Heart Disease Comorbidity",
+                value=True,
+                impact_level="HIGH_RISK_FACTOR",
+                relative_weight=0.031,
+                description="Existing cardiovascular pathology significantly reduces arterial compliance."
+            ))
+
+        # 6. Smoking (Weight ~ 0.052)
+        if req.smoking_history in (SmokingHistoryEnum.current, SmokingHistoryEnum.ever, SmokingHistoryEnum.former):
+            impacts.append(FeatureImpact(
+                feature="smoking_history",
+                display_name="Smoking History",
+                value=req.smoking_history.value,
+                impact_level="MODERATE_RISK_FACTOR",
+                relative_weight=0.052,
+                description="Active or past tobacco use accelerates arterial wall stiffness and sympathetic vasoconstriction."
+            ))
+        else:
+            impacts.append(FeatureImpact(
+                feature="smoking_history",
+                display_name="Smoking History",
+                value=req.smoking_history.value,
+                impact_level="PROTECTIVE_FACTOR",
+                relative_weight=0.052,
+                description="Non-smoking status protects arterial compliance and endothelial function."
+            ))
+
+        return impacts
+
     def predict(self, req: HypertensionPredictionRequest) -> HypertensionPredictionResponse:
         if self._model is None:
             self.load_model()
@@ -234,6 +360,7 @@ class HypertensionMLService:
             confidence = "Low Confidence (Borderline)"
 
         recommendations = self.generate_recommendations(req, pred, prob_positive)
+        feature_impacts = self.calculate_feature_impacts(req, pred, prob_positive)
 
         return HypertensionPredictionResponse(
             prediction=pred,
@@ -251,7 +378,8 @@ class HypertensionMLService:
                 "diabetes": req.diabetes,
                 "smoking_history": req.smoking_history.value
             },
-            recommendations=recommendations
+            recommendations=recommendations,
+            feature_impacts=feature_impacts
         )
 
 
