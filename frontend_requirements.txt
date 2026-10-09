@@ -2,9 +2,9 @@
                     FAMILY HEALTH GUARDIAN - FRONTEND REQUIREMENTS
               Complete Comprehensive Frontend Specification & API Guide
 ================================================================================
-Document Version : 2.0.0
-Backend Status   : Fully Audited (161/161 Tests Passing)
-Backend Stack    : FastAPI, Supabase PostgreSQL, Supabase Auth + JWT, PostgreSQL RLS
+Document Version : 2.1.0
+Backend Status   : Fully Audited (166/166 Tests Passing)
+Backend Stack    : FastAPI, Supabase PostgreSQL, Supabase Auth + JWT, PostgreSQL RLS, Scikit-Learn
 Motto            : "One Family. One Health Center. One Trusted Guardian."
 ================================================================================
 
@@ -28,6 +28,7 @@ TABLE OF CONTENTS:
    5.11 SOS Incident History & Filtering (/emergency/sos/history)
    5.12 Notification Center & Reminder Alerts (/notifications)
    5.13 Immutable Audit Trail & Activity Logs (/audit-logs)
+   5.14 Diabetes ML Prediction & Risk Assessment (/diabetes-risk)
 6. COMPLETE BACKEND API ENDPOINTS REFERENCE & CONTRACTS
 7. FULL TYPESCRIPT DATA MODELS & INTERFACES
 8. FRONTEND SECURITY, VALIDATION & ERROR HANDLING
@@ -338,6 +339,41 @@ Route Path                | Page Name                  | Access Level
   * Audit table with Timestamp, Actor User ID, Action Badge, Target Entity, and Safe Context.
   * Reassurance banner: "Audit logs are strictly tamper-evident and immutable (protected by database trigger)."
 
+--------------------------------------------------------------------------------
+5.14 Diabetes ML Prediction & Risk Assessment (/diabetes-risk)
+--------------------------------------------------------------------------------
+- Endpoints:
+  * `GET /predictions/diabetes/metadata` (Public metadata and clinical ranges)
+  * `POST /predictions/diabetes` (Protected inference, requires JWT Bearer)
+- Biometric Form Inputs:
+  * `age` (Number, 0 to 120, float)
+  * `gender` (Enum: "Male" | "Female" | "Other", case-insensitive)
+  * `hypertension` (Boolean: Yes / No toggle)
+  * `heart_disease` (Boolean: Yes / No toggle)
+  * `smoking_history` (Enum: "never" | "current" | "former" | "ever" | "not current")
+  * `bmi` (Number, 10.0 to 80.0, Body Mass Index with inline Height/Weight calculator helper)
+  * `hba1c_level` (Number, 3.0 to 20.0%, normal < 5.7%, prediabetes 5.7 - 6.4%, diabetic >= 6.5%)
+  * `blood_glucose_level` (Number, 30.0 to 600.0 mg/dL, normal fasting 70 - 99 mg/dL)
+  * `family_id` (Optional string UUID: associate assessment with a specific family member)
+  * `save_to_records` (Optional boolean: auto-persist assessment to health records)
+- Preset Demonstration Profiles:
+  * Healthy Preset (26yo, female, non-smoker, BMI 21.8, HbA1c 4.8, glucose 88)
+  * Borderline Preset (48yo, male, former smoker, hypertension, BMI 27.8, HbA1c 6.0, glucose 125)
+  * High Risk Preset (62yo, male, current smoker, heart disease, hypertension, BMI 33.4, HbA1c 7.8, glucose 175)
+- Results & Clinical Risk Panel:
+  * Risk Badge: `Low Risk` (Green) vs `High Risk` (Rose/Red)
+  * Risk Percentage Gauge (0.0% to 100.0%)
+  * Confidence Level Meter: `High Confidence`, `Moderate Confidence`, `Low Confidence (Borderline)`
+  * Biometric Feature Summary card reviewing input values
+  * Dynamic, Rule-Based Clinical Recommendations list tailored to specific risk factors:
+    - HbA1c diabetic threshold alerts (>= 6.5%)
+    - Pre-diabetes dietary intervention advice (5.7% - 6.4%)
+    - Fasting glucose monitoring advice (>= 140 mg/dL)
+    - BMI nutritional & exercise guidance (Overweight >= 25, Obese >= 30)
+    - Cardiovascular dual lipid/glycemic coordination alerts
+    - Microvascular smoking cessation counseling
+  * Immutable Audit Log: Every inference execution is automatically logged into the audit trail.
+
 ================================================================================
 6. COMPLETE BACKEND API ENDPOINTS REFERENCE & CONTRACTS
 ================================================================================
@@ -395,6 +431,8 @@ DELETE | /medical-reports/{id}                  | None
 GET    | /notifications                         | Query: status?, type?, limit?, offset?
 PATCH  | /notifications/{id}/read               | None
 GET    | /audit-logs                            | Query: family_id?, family_member_id?, action?, resource_type?, limit?, offset?
+GET    | /predictions/diabetes/metadata         | None (Public)
+POST   | /predictions/diabetes                  | { age, gender, hypertension, heart_disease, smoking_history, bmi, hba1c_level, blood_glucose_level, family_id?, save_to_records? }
 
 ================================================================================
 7. FULL TYPESCRIPT DATA MODELS & INTERFACES
@@ -585,6 +623,51 @@ export interface AuditLog {
   metadata: Record<string, any>;
   created_at: string;
 }
+
+// 13. ML Diabetes Prediction
+export type GenderType = 'Male' | 'Female' | 'Other';
+export type SmokingHistoryType = 'never' | 'current' | 'former' | 'ever' | 'not current';
+
+export interface DiabetesPredictionRequest {
+  age: number;
+  gender: GenderType;
+  hypertension: boolean;
+  heart_disease: boolean;
+  smoking_history: SmokingHistoryType;
+  bmi: number;
+  hba1c_level: number;
+  blood_glucose_level: number;
+  family_id?: string;
+  save_to_records?: boolean;
+}
+
+export interface DiabetesPredictionResponse {
+  prediction: number; // 0 for low risk, 1 for high risk
+  risk_label: 'Low Risk' | 'High Risk';
+  risk_probability: number; // 0.0 to 1.0
+  risk_percentage: number; // e.g. 89.0
+  confidence_level: string; // 'High Confidence' | 'Moderate Confidence' | 'Low Confidence (Borderline)'
+  feature_summary: {
+    age: number;
+    gender: string;
+    bmi: number;
+    hba1c_level: number;
+    blood_glucose_level: number;
+    hypertension: boolean;
+    heart_disease: boolean;
+    smoking_history: string;
+  };
+  recommendations: string[];
+  assessed_at: string;
+}
+
+export interface DiabetesModelMetadata {
+  model_name: string;
+  disease_target: string;
+  features_count: number;
+  expected_features: string[];
+  feature_details: Record<string, any>;
+}
 ```
 
 ================================================================================
@@ -595,6 +678,7 @@ export interface AuditLog {
    - Phone Number: Validate using regex `/^\+?[0-9]{5,20}$/`.
    - File Uploads: Reject files > 15MB or not matching PDF/PNG/JPG before upload.
    - Coordinates: If latitude is provided, longitude is required (-90 to 90, -180 to 180).
+   - Diabetes Biometrics: Validate numerical ranges before dispatch (age: 0-120, bmi: 10-80, hba1c: 3-20, glucose: 30-600).
 2. Never send user emails for authorization:
    - Always rely on user UUIDs and Supabase Auth token payload `sub`.
 3. Error Code Mapping:
@@ -602,6 +686,7 @@ export interface AuditLog {
    - 401 Unauthorized: Redirect to `/login`, clear cached user session.
    - 403 Forbidden: Display friendly warning toast (e.g. "Active FULL_ACCESS consent required for this action").
    - 404 Not Found: Display resource missing empty state.
+   - 422 Unprocessable Entity: Parse FastAPI validation errors array `{ loc, msg, type }` into form field errors.
 4. Secret Sanitization Guarantee:
    - Never send tokens or passwords in query params or request bodies.
    - Form inputs for sensitive data should clear on submit.
@@ -609,47 +694,64 @@ export interface AuditLog {
 ================================================================================
 9. ENVIRONMENT CONFIGURATION (.env)
 ================================================================================
-Create `.env` in your frontend project root:
+Create `.env` in your frontend project root (`frontend/.env`):
 
 ```env
-# Backend API Base URL
-VITE_API_BASE_URL="http://127.0.0.1:8000/api/v1"
+# Application Configuration
+VITE_APP_NAME="Family Health Guardian"
 
-# Supabase Client Configuration
-VITE_SUPABASE_URL="https://your-project.supabase.co"
-VITE_SUPABASE_ANON_KEY="your-supabase-anon-key"
+# Production Backend (Render Cloud):
+VITE_API_BASE_URL="https://family-health-guardian-backend.onrender.com/api/v1"
+VITE_SWAGGER_URL="https://family-health-guardian-backend.onrender.com/docs"
+VITE_OPENAPI_URL="https://family-health-guardian-backend.onrender.com/api/v1/openapi.json"
+
+# Local Development Alternative:
+# VITE_API_BASE_URL="http://127.0.0.1:8000/api/v1"
+# VITE_SWAGGER_URL="http://127.0.0.1:8000/docs"
+# VITE_OPENAPI_URL="http://127.0.0.1:8000/api/v1/openapi.json"
+
+# Supabase Authentication & Database Bindings
+VITE_SUPABASE_URL="https://utfdzsucfgsvocoviroa.supabase.co"
+VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZmR6c3VjZmdzdm9jb3Zpcm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMDY5MDcsImV4cCI6MjEwNjc4MjkwN30.h_Pqzlz8yzJWqEeOJYmktwWtijWfa9Ah61E1mFwMBQE"
 ```
 
 ================================================================================
 10. STEP-BY-STEP IMPLEMENTATION ROADMAP
 ================================================================================
 Phase 1: Foundation & Auth
-  [ ] Initialize React/Next.js TypeScript project.
-  [ ] Set up Supabase client and AuthContext.
-  [ ] Implement Axios client with Bearer token interceptor.
-  [ ] Create Login, Registration, and Profile settings pages.
+  [x] Initialize React 19 + TypeScript + Vite project.
+  [x] Set up Supabase client and AuthContext.
+  [x] Implement Axios client with Bearer token interceptor.
+  [x] Create Login, Registration, and Profile settings pages.
 
 Phase 2: Families & Consents
-  [ ] Implement Family Switcher and Family Workspace view.
-  [ ] Build member list and Add Member modal (ADMIN only).
-  [ ] Build Consent Hub with "Granted by Me" and "Granted to Me" tabs.
+  [x] Implement Family Switcher and Family Workspace view.
+  [x] Build member list and Add Member modal (ADMIN only).
+  [x] Build Consent Hub with "Granted by Me" and "Granted to Me" tabs.
 
 Phase 3: Core Health Features
-  [ ] Build Health Records summary view and edit modal.
-  [ ] Build Medicines catalog and active/past filters.
-  [ ] Build Medicine Schedules & Daily Intake Log timeline.
-  [ ] Implement Medical Reports drag-and-drop uploader with signed-URL viewer.
+  [x] Build Health Records summary view and edit modal.
+  [x] Build Medicines catalog and active/past filters.
+  [x] Build Medicine Schedules & Daily Intake Log timeline.
+  [x] Implement Medical Reports drag-and-drop uploader with signed-URL viewer.
 
 Phase 4: Emergency System & Real-Time Alerts
-  [ ] Build Emergency Contacts roster with priority rank ordering.
-  [ ] Implement Floating SOS button with 3-second hold and Geolocation API.
-  [ ] Implement active SOS incident modal with Leaflet / Mapbox GPS map.
-  [ ] Build SOS incident history table with date/status filters.
+  [x] Build Emergency Contacts roster with priority rank ordering.
+  [x] Implement Floating SOS button with 3-second hold and Geolocation API.
+  [x] Implement active SOS incident modal with Leaflet / Mapbox GPS map.
+  [x] Build SOS incident history table with date/status filters.
 
 Phase 5: Notifications, Audit & Polish
-  [ ] Build Notification Center feed with unread count and mark-as-read.
-  [ ] Build Audit Trail table for admins and guardians.
-  [ ] Test complete user journey end-to-end against FastAPI backend.
+  [x] Build Notification Center feed with unread count and mark-as-read.
+  [x] Build Audit Trail table for admins and guardians.
+  [x] Test complete user journey end-to-end against FastAPI backend.
+
+Phase 6: Machine Learning Risk Assessment
+  [x] Build Diabetes Risk Assessment page (/diabetes-risk) with biometric form inputs.
+  [x] Implement inline BMI calculator (Height/Weight to BMI conversion).
+  [x] Provide quick demonstration presets (Healthy, Borderline, High Risk).
+  [x] Render dynamic risk probability gauge, confidence meter, and actionable health recommendations.
+  [x] Provide association with family members and optional record persistence.
 ================================================================================
                         END OF FRONTEND REQUIREMENTS
 ================================================================================
