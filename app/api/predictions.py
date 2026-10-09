@@ -69,6 +69,14 @@ def predict_diabetes_risk(
         )
 
         return result
+    except (RuntimeError, FileNotFoundError, ValueError) as e:
+        logger.error("Diabetes ML service unavailable: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Diabetes ML service is unavailable: {str(e)}"
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error during diabetes prediction inference: %s", str(e), exc_info=True)
         raise HTTPException(

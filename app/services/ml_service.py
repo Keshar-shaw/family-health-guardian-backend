@@ -39,9 +39,9 @@ class DiabetesMLService:
 
     def __init__(self):
         try:
-            self._load_model()
+            self.load_model()
         except Exception as e:
-            logger.warning("Diabetes ML model could not be pre-loaded at startup: %s", e)
+            logger.warning("Diabetes ML model could not be pre-loaded on init: %s", e)
 
     @classmethod
     def get_instance(cls) -> "DiabetesMLService":
@@ -49,33 +49,64 @@ class DiabetesMLService:
             cls._instance = DiabetesMLService()
         return cls._instance
 
-    def _resolve_model_path(self) -> Path:
-        base_dir = Path(__file__).resolve().parent.parent.parent
-        primary_path = base_dir / "models" / "diabetes_model.pkl"
-        if primary_path.exists():
-            return primary_path
+    @property
+    def is_loaded(self) -> bool:
+        """Return True if model is loaded in memory and ready for inference."""
+        return self._model is not None
 
-        cwd_path = Path.cwd() / "models" / "diabetes_model.pkl"
-        if cwd_path.exists():
-            return cwd_path
+    def _resolve_model_path(self) -> Path:
+        """
+        Deterministically resolve the model file path relative to the backend project root.
+        Never relies on current working directory (CWD) or user-supplied input.
+        """
+        env_path = os.getenv("DIABETES_MODEL_PATH")
+        if env_path:
+            p = Path(env_path).resolve()
+            if p.is_file():
+                return p
+            raise FileNotFoundError(f"Configured DIABETES_MODEL_PATH not found: {p}")
+
+        # Deterministic project path: backend/app/services/ml_service.py -> backend/models/diabetes_model.pkl
+        project_root = Path(__file__).resolve().parent.parent.parent
+        project_model_path = project_root / "models" / "diabetes_model.pkl"
+
+        if project_model_path.is_file():
+            return project_model_path
 
         raise FileNotFoundError(
-            f"Diabetes ML model file not found. Looked in {primary_path} and {cwd_path}"
+            f"Diabetes ML model file not found at project location: {project_model_path}"
         )
 
-    def _load_model(self):
+    def load_model(self, force_reload: bool = False) -> None:
+        """
+        Load the model into memory and cache it.
+        Avoids reloading from disk on every request.
+        """
+        if self._model is not None and not force_reload:
+            return
+
+        model_path = self._resolve_model_path()
+        logger.info("Loading Diabetes ML model from project path %s", model_path)
         try:
-            model_path = self._resolve_model_path()
-            logger.info("Loading Diabetes ML model from %s", model_path)
             loaded_obj = joblib.load(model_path)
-            if isinstance(loaded_obj, dict) and 'model' in loaded_obj:
-                self._model = loaded_obj['model']
-            else:
-                self._model = loaded_obj
-            logger.info("Diabetes ML model loaded successfully.")
         except Exception as e:
-            logger.error("Error loading diabetes model: %s", e)
-            raise
+            self._model = None
+            logger.error("Failed to deserialize diabetes ML model from %s: %s", model_path, e)
+            raise RuntimeError(f"Failed to deserialize diabetes ML model file: {e}") from e
+
+        if isinstance(loaded_obj, dict) and 'model' in loaded_obj:
+            estimator = loaded_obj['model']
+        else:
+            estimator = loaded_obj
+
+        if not hasattr(estimator, "predict") or not hasattr(estimator, "predict_proba"):
+            self._model = None
+            raise ValueError(
+                f"Incompatible model object loaded from {model_path}: missing predict/predict_proba methods"
+            )
+
+        self._model = estimator
+        logger.info("Diabetes ML model loaded and cached successfully.")
 
     def get_expected_features(self) -> List[str]:
         """Derive expected feature names and ordering directly from the trained model."""
@@ -161,9 +192,12 @@ class DiabetesMLService:
 
         return recommendations
 
+    # Backward compatibility alias
+    _load_model = load_model
+
     def predict(self, req: DiabetesPredictionRequest) -> DiabetesPredictionResponse:
         if self._model is None:
-            self._load_model()
+            self.load_model()
         if self._model is None:
             raise RuntimeError("Diabetes ML model is not available")
 

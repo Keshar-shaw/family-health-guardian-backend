@@ -251,3 +251,94 @@ def test_predict_diabetes_with_no_info_smoking(client, auth_headers):
         assert data["prediction"] == 0
         assert data["risk_label"] == "Low Risk"
 
+
+# ---------------------------------------------------------------------------
+# Model Lifecycle, Caching & Missing/Incompatible Model Tests
+# ---------------------------------------------------------------------------
+
+def test_model_successful_loading_and_caching():
+    """Verify load_model successfully loads model once and caches it across subsequent calls."""
+    from app.services.ml_service import ml_service
+
+    ml_service.load_model(force_reload=False)
+    assert ml_service.is_loaded is True
+    cached_model = ml_service._model
+
+    # Calling load_model again without force_reload should immediately reuse cached model
+    ml_service.load_model(force_reload=False)
+    assert ml_service._model is cached_model
+
+
+def test_model_path_resolved_relative_to_project():
+    """Verify model path resolution is deterministic and anchored to backend project root."""
+    from pathlib import Path
+    from app.services.ml_service import ml_service
+
+    path = ml_service._resolve_model_path()
+    assert isinstance(path, Path)
+    assert path.is_file()
+    assert path.name == "diabetes_model.pkl"
+    assert "models" in path.parts
+
+
+def test_missing_model_raises_clear_error_and_never_predicts():
+    """Verify missing model file raises clear error instead of producing a false prediction."""
+    import pytest
+    from app.services.ml_service import ml_service
+    from app.schemas.ml_prediction import DiabetesPredictionRequest
+
+    req = DiabetesPredictionRequest(
+        age=30.0,
+        gender="Female",
+        hypertension=False,
+        heart_disease=False,
+        smoking_history="never",
+        bmi=22.0,
+        hba1c_level=5.0,
+        blood_glucose_level=90.0
+    )
+
+    with patch.object(ml_service, "_resolve_model_path", side_effect=FileNotFoundError("Mock model file missing")):
+        with patch.object(ml_service, "_model", None):
+            with pytest.raises(FileNotFoundError, match="Mock model file missing"):
+                ml_service.predict(req)
+
+    # Ensure model is restored
+    ml_service.load_model(force_reload=True)
+
+
+def test_missing_model_endpoint_returns_503(client, auth_headers):
+    """Verify endpoint returns HTTP 503 Service Unavailable when model is missing, not a false prediction."""
+    from app.services.ml_service import ml_service
+
+    payload = {
+        "age": 45.0,
+        "gender": "Male",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 25.0,
+        "hba1c_level": 5.5,
+        "blood_glucose_level": 100.0
+    }
+
+    with patch.object(ml_service, "predict", side_effect=RuntimeError("Diabetes ML model is unavailable")):
+        res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+        assert res.status_code == 503
+        assert "Diabetes ML service is unavailable" in res.json()["detail"]
+
+
+def test_incompatible_model_structure_rejected():
+    """Verify corrupt or incompatible model objects missing predict/predict_proba are rejected."""
+    import pytest
+    from app.services.ml_service import ml_service
+
+    # Mock joblib.load returning an object without predict methods
+    with patch("joblib.load", return_value={"model": "not_an_estimator"}):
+        with pytest.raises(ValueError, match="missing predict/predict_proba"):
+            ml_service.load_model(force_reload=True)
+
+    # Restore valid model
+    ml_service.load_model(force_reload=True)
+
+
