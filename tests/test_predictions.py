@@ -845,3 +845,162 @@ def test_sanitization_no_auth_tokens_in_stored_records_or_audit(client, auth_hea
         assert "token" not in val_str
         assert "password" not in val_str
         assert "secret" not in val_str
+
+
+def test_individual_physiological_measurement_boundaries(client, auth_headers):
+    """Verify each physiological metric strictly rejects out-of-range boundaries."""
+    base = {
+        "age": 40.0,
+        "gender": "Female",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 24.0,
+        "hba1c_level": 5.2,
+        "blood_glucose_level": 95.0
+    }
+
+    # Age boundaries: [0.0, 120.0]
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "age": -1.0}, headers=auth_headers).status_code == 422
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "age": 121.0}, headers=auth_headers).status_code == 422
+
+    # BMI boundaries: [10.0, 80.0]
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "bmi": 9.9}, headers=auth_headers).status_code == 422
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "bmi": 80.1}, headers=auth_headers).status_code == 422
+
+    # HbA1c boundaries: [3.0, 20.0]
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "hba1c_level": 2.9}, headers=auth_headers).status_code == 422
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "hba1c_level": 20.1}, headers=auth_headers).status_code == 422
+
+    # Blood glucose boundaries: [30.0, 600.0]
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "blood_glucose_level": 29.0}, headers=auth_headers).status_code == 422
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "blood_glucose_level": 601.0}, headers=auth_headers).status_code == 422
+
+    # Invalid categorical options
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "gender": "UnknownGender"}, headers=auth_headers).status_code == 422
+    assert client.post("/api/v1/predictions/diabetes", json={**base, "smoking_history": "cigar"}, headers=auth_headers).status_code == 422
+
+
+def test_prediction_probability_and_response_schema_contract(client, auth_headers):
+    """Verify prediction probability bounds and complete response schema against actual loaded model."""
+    from datetime import datetime
+
+    payload = {
+        "age": 55.0,
+        "gender": "Male",
+        "hypertension": True,
+        "heart_disease": False,
+        "smoking_history": "former",
+        "bmi": 28.5,
+        "hba1c_level": 6.3,
+        "blood_glucose_level": 135.0,
+        "save_to_records": False
+    }
+
+    with patch("app.services.audit.AuditService.log_action"):
+        res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+
+        # Contract assertions
+        assert isinstance(data["prediction"], int)
+        assert data["prediction"] in (0, 1)
+        assert data["risk_label"] in ("Low Risk", "High Risk")
+        assert isinstance(data["risk_probability"], float)
+        assert 0.0 <= data["risk_probability"] <= 1.0
+        assert data["risk_percentage"] == round(data["risk_probability"] * 100.0, 1)
+        assert data["confidence_level"] in ("High Confidence", "Moderate Confidence", "Low Confidence (Borderline)")
+
+        # Feature summary exact fidelity
+        summary = data["feature_summary"]
+        assert summary["age"] == 55.0
+        assert summary["gender"] == "Male"
+        assert summary["hypertension"] is True
+        assert summary["heart_disease"] is False
+        assert summary["smoking_history"] == "former"
+        assert summary["bmi"] == 28.5
+        assert summary["hba1c_level"] == 6.3
+        assert summary["blood_glucose_level"] == 135.0
+
+        # Timestamp and record_id
+        assert datetime.fromisoformat(data["assessed_at"].replace("Z", "+00:00"))
+        assert data["record_id"] is None
+
+
+def test_recommendations_triggered_by_clinical_conditions(client, auth_headers):
+    """Verify specific physiological inputs trigger appropriate tailored recommendations."""
+    payload = {
+        "age": 65.0,
+        "gender": "Male",
+        "hypertension": True,
+        "heart_disease": True,
+        "smoking_history": "current",
+        "bmi": 33.0,
+        "hba1c_level": 7.8,
+        "blood_glucose_level": 190.0,
+        "save_to_records": False
+    }
+
+    with patch("app.services.audit.AuditService.log_action"):
+        res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        recs = res.json()["recommendations"]
+
+        assert any("diabetic threshold" in r or "oral glucose" in r for r in recs), "Missing HbA1c recommendation"
+        assert any("Blood glucose reading" in r for r in recs), "Missing glucose recommendation"
+        assert any("obese" in r for r in recs), "Missing BMI/obesity recommendation"
+        assert any("Cardiovascular comorbidity" in r for r in recs), "Missing comorbidity recommendation"
+        assert any("Smoking" in r for r in recs), "Missing smoking recommendation"
+
+
+def test_auth_expired_or_invalid_tokens_rejected(client):
+    """Verify invalid or expired JWT tokens are rejected with HTTP 401 Unauthorized."""
+    import jwt
+    import time
+    from app.config import settings
+
+    payload = {
+        "age": 35.0,
+        "gender": "Female",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 22.0,
+        "hba1c_level": 4.8,
+        "blood_glucose_level": 88.0
+    }
+
+    # 1. Expired token
+    expired_token = jwt.encode(
+        {"sub": str(uuid.uuid4()), "exp": int(time.time()) - 3600, "aud": "authenticated"},
+        settings.SUPABASE_JWT_SECRET,
+        algorithm="HS256"
+    )
+    res_exp = client.post("/api/v1/predictions/diabetes", json=payload, headers={"Authorization": f"Bearer {expired_token}"})
+    assert res_exp.status_code == 401
+
+    # 2. Malformed token
+    res_bad = client.post("/api/v1/predictions/diabetes", json=payload, headers={"Authorization": "Bearer not.a.valid.jwt"})
+    assert res_bad.status_code == 401
+
+
+def test_model_deserialization_error_handled_gracefully(client, auth_headers):
+    """Verify unpickling or corrupted file error produces HTTP 503 rather than crashing."""
+    from app.services.ml_service import ml_service
+
+    payload = {
+        "age": 42.0,
+        "gender": "Male",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 24.0,
+        "hba1c_level": 5.2,
+        "blood_glucose_level": 95.0
+    }
+
+    with patch.object(ml_service, "predict", side_effect=RuntimeError("Corrupt model pickle file")):
+        res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+        assert res.status_code == 503
+        assert "Diabetes ML service is unavailable" in res.json()["detail"]
+

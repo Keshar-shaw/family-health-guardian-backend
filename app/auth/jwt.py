@@ -1,7 +1,8 @@
+import time
 import jwt
 from fastapi import HTTPException, status
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Union
 from app.config import settings
 
 
@@ -10,7 +11,7 @@ class UserTokenPayload(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
     aud: Optional[str] = None
-    exp: Optional[int] = None
+    exp: Optional[Union[int, float]] = None
 
 
 def decode_jwt_token(token: str) -> UserTokenPayload:
@@ -31,6 +32,23 @@ def decode_jwt_token(token: str) -> UserTokenPayload:
             # Unverified decode for testing / local dev fallback when secret is not configured
             payload = jwt.decode(token, options={"verify_signature": False})
         
+        # Check token expiration
+        exp = payload.get("exp")
+        if exp is not None:
+            try:
+                if float(exp) < time.time():
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authentication token has expired",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token expiration format",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
         user_id = payload.get("sub")
         if not user_id:
             raise HTTPException(
