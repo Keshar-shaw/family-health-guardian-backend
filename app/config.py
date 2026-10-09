@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     SUPABASE_KEY: str = "placeholder-key"
     SUPABASE_JWT_SECRET: str = "placeholder-jwt-secret-min-32-chars-long"
 
+    DIABETES_MODEL_PATH: Optional[str] = None
+    HYPERTENSION_MODEL_PATH: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

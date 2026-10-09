@@ -6,18 +6,26 @@ import logging
 from app.config import settings
 from app.api.router import api_router
 from app.services.ml_service import ml_service
+from app.services.hypertension_service import hypertension_ml_service
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application startup & shutdown lifecycle: warm up cached ML model once."""
+    """Application startup & shutdown lifecycle: warm up cached ML models once."""
     try:
         ml_service.load_model()
         logger.info("Diabetes ML model loaded and cached on startup.")
     except Exception as e:
         logger.warning("Diabetes ML model not pre-cached on startup: %s", e)
+
+    try:
+        hypertension_ml_service.load_model()
+        logger.info("Hypertension ML model loaded and cached on startup.")
+    except Exception as e:
+        logger.warning("Hypertension ML model not pre-cached on startup: %s", e)
+
     yield
 
 
