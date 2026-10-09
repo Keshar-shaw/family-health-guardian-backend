@@ -29,6 +29,7 @@ class DiabetesPredictionRequest(BaseModel):
     hba1c_level: float = Field(..., ge=3.0, le=20.0, description="Hemoglobin A1c level (HbA1c)")
     blood_glucose_level: float = Field(..., ge=30.0, le=600.0, description="Blood glucose level in mg/dL")
     family_id: Optional[str] = Field(None, description="Optional Family UUID to associate record with")
+    family_member_id: Optional[str] = Field(None, description="Optional Family Member UUID (e.g. for dependents)")
     save_to_records: bool = Field(False, description="Whether to persist the result in health records")
 
     @field_validator('age', 'bmi', 'hba1c_level', 'blood_glucose_level', mode='before')
@@ -80,3 +81,23 @@ class DiabetesPredictionResponse(BaseModel):
     feature_summary: dict = Field(..., description="Summary of input values used for the inference")
     recommendations: List[str] = Field(..., description="Actionable health recommendations")
     assessed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    record_id: Optional[str] = Field(None, description="UUID of the saved prediction record if persisted")
+
+
+class PredictionHistoryResponse(BaseModel):
+    id: str = Field(..., description="Unique UUID of the prediction history record")
+    user_id: str = Field(..., description="UUID of the authenticated user")
+    family_id: Optional[str] = Field(None, description="Optional Family UUID")
+    family_member_id: Optional[str] = Field(None, description="Optional Family Member UUID")
+    prediction_type: str = Field("DIABETES", description="Type of disease prediction")
+    model_version: str = Field("1.0.0", description="Model version")
+    model_name: str = Field("RandomForestClassifier", description="Model algorithm name")
+    input_measurements: dict = Field(..., description="Consented input measurements")
+    prediction_result: int = Field(..., description="Binary prediction outcome (0 or 1)")
+    risk_label: str = Field(..., description="'Low Risk' or 'High Risk'")
+    risk_probability: float = Field(..., description="Calculated probability (0.0 to 1.0)")
+    risk_percentage: float = Field(..., description="Calculated risk percentage")
+    confidence_level: str = Field(..., description="Confidence label")
+    recommendations: List[str] = Field(default_factory=list, description="Health recommendations")
+    created_at: str = Field(..., description="Timestamp of prediction")
+

@@ -55,6 +55,7 @@ Apply the migrations in numerical order in your Supabase SQL Editor:
 | `10_notifications.sql` | `notifications` table, `notification_type` & `notification_status` enums, RLS policies |
 | `11_sos_location_support.sql` | Optional GPS coordinates, validation check constraints, and spatial indexes on `sos_events` |
 | `12_audit_logs.sql` | `audit_logs` table, immutability trigger `prevent_audit_log_modification`, append-only RLS |
+| `13_prediction_history.sql` | `prediction_history` table, cross-family RLS policies, indexing, and medical audit support |
 
 ---
 
@@ -83,6 +84,14 @@ Apply the migrations in numerical order in your Supabase SQL Editor:
 - `GET /health-records/{id}` - Retrieve specific health record by ID
 - `PUT /health-records/{id}` - Update health record (`FULL_ACCESS` consent required)
 - `DELETE /health-records/{id}` - Delete health record (`FULL_ACCESS` consent required)
+
+### ML Predictions & Risk History
+- `GET /api/v1/predictions/diabetes/metadata` - Retrieve model feature names, count, and ranges
+- `POST /api/v1/predictions/diabetes` - Run diabetes ML inference; optionally persist to `prediction_history` when `save_to_records=true`
+- `GET /api/v1/predictions/history` - List authorized prediction history records (filter by `family_id` or `family_member_id`)
+- `GET /api/v1/predictions/history/{record_id}` - Retrieve specific prediction record by ID (enforces family authorization)
+- `DELETE /api/v1/predictions/history/{record_id}` - Delete prediction record (owner only)
+
 
 ### Medicines & Prescriptions
 - `POST /medicines` - Register new medicine

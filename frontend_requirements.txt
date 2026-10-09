@@ -432,7 +432,10 @@ GET    | /notifications                         | Query: status?, type?, limit?,
 PATCH  | /notifications/{id}/read               | None
 GET    | /audit-logs                            | Query: family_id?, family_member_id?, action?, resource_type?, limit?, offset?
 GET    | /predictions/diabetes/metadata         | None (Public)
-POST   | /predictions/diabetes                  | { age, gender, hypertension, heart_disease, smoking_history, bmi, hba1c_level, blood_glucose_level, family_id?, save_to_records? }
+POST   | /predictions/diabetes                  | { age, gender, hypertension, heart_disease, smoking_history, bmi, hba1c_level, blood_glucose_level, family_id?, family_member_id?, save_to_records? }
+GET    | /predictions/history                   | Query: family_id?, family_member_id?, limit?, offset?
+GET    | /predictions/history/{id}              | None
+DELETE | /predictions/history/{id}              | None
 
 ================================================================================
 7. FULL TYPESCRIPT DATA MODELS & INTERFACES
@@ -657,17 +660,46 @@ export interface DiabetesPredictionResponse {
     heart_disease: boolean;
     smoking_history: string;
   };
-  recommendations: string[];
-  assessed_at: string;
-}
+    recommendations: string[];
+    assessed_at: string;
+    record_id?: string;
+  }
 
-export interface DiabetesModelMetadata {
-  model_name: string;
-  disease_target: string;
-  features_count: number;
-  expected_features: string[];
-  feature_details: Record<string, any>;
-}
+  export interface PredictionHistoryItem {
+    id: string;
+    user_id: string;
+    family_id?: string;
+    family_member_id?: string;
+    prediction_type: string;
+    model_version: string;
+    model_name: string;
+    input_measurements: {
+      age: number;
+      gender: string;
+      bmi: number;
+      hba1c_level: number;
+      blood_glucose_level: number;
+      hypertension: boolean;
+      heart_disease: boolean;
+      smoking_history: string;
+    };
+    prediction_result: number;
+    risk_label: 'Low Risk' | 'High Risk';
+    risk_probability: number;
+    risk_percentage: number;
+    confidence_level: string;
+    recommendations: string[];
+    created_at: string;
+  }
+
+  export interface DiabetesModelMetadata {
+    model_name: string;
+    disease_target: string;
+    features_count: number;
+    expected_features: string[];
+    feature_details: Record<string, any>;
+  }
+
 ```
 
 ================================================================================

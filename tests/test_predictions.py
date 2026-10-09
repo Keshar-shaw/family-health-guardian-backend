@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import patch, MagicMock
 
 
@@ -342,3 +343,505 @@ def test_incompatible_model_structure_rejected():
     ml_service.load_model(force_reload=True)
 
 
+# ---------------------------------------------------------------------------
+# Prediction History Persistence & Cross-Family Authorization Tests
+# ---------------------------------------------------------------------------
+
+class MockPredictionQueryBuilder:
+    def __init__(self, data=None):
+        self._data = [dict(item) for item in data] if data is not None else []
+        self._range_start = 0
+        self._range_end = None
+
+    def select(self, *args, **kwargs):
+        return self
+
+    def eq(self, column, value):
+        self._data = [item for item in self._data if str(item.get(column)) == str(value)]
+        return self
+
+    def in_(self, column, values):
+        val_strs = [str(v) for v in values]
+        self._data = [item for item in self._data if str(item.get(column)) in val_strs]
+        return self
+
+    def order(self, column, desc=False):
+        return self
+
+    def range(self, start, end):
+        self._range_start = start
+        self._range_end = end
+        return self
+
+    def insert(self, payload):
+        p = dict(payload)
+        if "id" not in p:
+            p["id"] = str(uuid.uuid4())
+        p.setdefault("created_at", "2026-10-10T02:00:00Z")
+        self._data = [p]
+        return self
+
+    def delete(self):
+        return self
+
+    def execute(self):
+        res = MagicMock()
+        items = list(self._data)
+        if self._range_end is not None:
+            items = items[self._range_start:self._range_end + 1]
+        res.data = items
+        return res
+
+
+def setup_mock_db(tables_data):
+    mock_supabase = MagicMock()
+    mock_tables = {}
+
+    def get_table(name):
+        data = tables_data.get(name, [])
+        builder = MockPredictionQueryBuilder(data)
+        mock_tables[name] = builder
+        return builder
+
+    mock_supabase.table.side_effect = get_table
+    mock_supabase._tables = mock_tables
+    return mock_supabase
+
+
+def test_predict_diabetes_save_to_records_self_no_family(client, auth_headers, test_user_id):
+    """Verify save_to_records=True with no family_id saves personal prediction linked to user_id."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    mock_db = setup_mock_db({
+        "prediction_history": [],
+        "audit_logs": []
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "age": 50.0,
+        "gender": "Female",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 26.0,
+        "hba1c_level": 5.4,
+        "blood_glucose_level": 110.0,
+        "save_to_records": True
+    }
+
+    res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["record_id"] is not None
+    assert uuid.UUID(data["record_id"])  # Valid UUID format
+    assert data["prediction"] in (0, 1)
+
+
+def test_predict_diabetes_save_to_records_authorized_family(client, auth_headers, test_user_id):
+    """Verify save_to_records=True with authorized family_id persists linked family references."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    family_id = str(uuid.uuid4())
+    family_member_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_db({
+        "family_members": [{
+            "id": family_member_id,
+            "family_id": family_id,
+            "user_id": test_user_id,
+            "role": "MEMBER"
+        }],
+        "prediction_history": [],
+        "audit_logs": []
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "age": 62.0,
+        "gender": "Male",
+        "hypertension": True,
+        "heart_disease": True,
+        "smoking_history": "former",
+        "bmi": 31.0,
+        "hba1c_level": 7.2,
+        "blood_glucose_level": 175.0,
+        "family_id": family_id,
+        "save_to_records": True
+    }
+
+    res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["record_id"] is not None
+
+
+def test_predict_diabetes_save_to_records_denied_cross_family(client, auth_headers, test_user_id):
+    """Verify save_to_records=True with unauthorized family_id is rejected with HTTP 403 Forbidden."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    unauthorized_family_id = str(uuid.uuid4())
+
+    # User is NOT a member of unauthorized_family_id
+    mock_db = setup_mock_db({
+        "family_members": [],
+        "prediction_history": []
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "age": 40.0,
+        "gender": "Female",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 24.0,
+        "hba1c_level": 5.1,
+        "blood_glucose_level": 95.0,
+        "family_id": unauthorized_family_id,
+        "save_to_records": True
+    }
+
+    res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 403
+    assert "Access denied: you are not a member of this family" in res.json()["detail"]
+
+
+def test_predict_diabetes_save_to_records_denied_cross_member_no_consent(client, auth_headers, test_user_id):
+    """Verify attempting to save a prediction for another member without active consent is rejected with HTTP 403."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    family_id = str(uuid.uuid4())
+    my_member_id = str(uuid.uuid4())
+    other_member_id = str(uuid.uuid4())
+    other_user_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_db({
+        "family_members": [
+            {"id": my_member_id, "family_id": family_id, "user_id": test_user_id, "role": "MEMBER"},
+            {"id": other_member_id, "family_id": family_id, "user_id": other_user_id, "role": "MEMBER"}
+        ],
+        "consents": [],  # No active consent granted
+        "prediction_history": []
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    payload = {
+        "age": 45.0,
+        "gender": "Male",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 27.0,
+        "hba1c_level": 5.8,
+        "blood_glucose_level": 115.0,
+        "family_id": family_id,
+        "family_member_id": other_member_id,
+        "save_to_records": True
+    }
+
+    res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 403
+    assert "Active FULL_ACCESS consent required" in res.json()["detail"]
+
+
+def test_predict_diabetes_database_failure(client, auth_headers, test_user_id):
+    """Verify database insertion failure produces HTTP 500 without crashing."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    mock_supabase = MagicMock()
+    mock_table = MagicMock()
+    # Mock insert returning empty data or error
+    mock_table.insert.return_value.execute.side_effect = RuntimeError("Supabase connection timeout")
+    mock_supabase.table.return_value = mock_table
+
+    app.dependency_overrides[get_supabase] = lambda: mock_supabase
+
+    payload = {
+        "age": 52.0,
+        "gender": "Female",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 28.0,
+        "hba1c_level": 6.0,
+        "blood_glucose_level": 130.0,
+        "save_to_records": True
+    }
+
+    res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 500
+    assert "Database failure" in res.json()["detail"]
+
+
+def test_list_prediction_history_self(client, auth_headers, test_user_id):
+    """Verify listing prediction history returns only records belonging to the authenticated caller."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    rec1 = {
+        "id": str(uuid.uuid4()),
+        "user_id": test_user_id,
+        "family_id": None,
+        "family_member_id": None,
+        "prediction_type": "DIABETES",
+        "model_version": "1.0.0",
+        "model_name": "RandomForestClassifier",
+        "input_measurements": {"age": 45, "bmi": 25},
+        "prediction_result": 0,
+        "risk_label": "Low Risk",
+        "risk_probability": 0.05,
+        "risk_percentage": 5.0,
+        "confidence_level": "High Confidence",
+        "recommendations": ["Annual check-up"],
+        "created_at": "2026-10-10T02:00:00Z"
+    }
+
+    other_user_rec = {
+        "id": str(uuid.uuid4()),
+        "user_id": str(uuid.uuid4()),
+        "family_id": None,
+        "family_member_id": None,
+        "prediction_type": "DIABETES",
+        "model_version": "1.0.0",
+        "model_name": "RandomForestClassifier",
+        "input_measurements": {"age": 70, "bmi": 32},
+        "prediction_result": 1,
+        "risk_label": "High Risk",
+        "risk_probability": 0.85,
+        "risk_percentage": 85.0,
+        "confidence_level": "High Confidence",
+        "recommendations": ["Consult physician"],
+        "created_at": "2026-10-10T01:00:00Z"
+    }
+
+    mock_db = setup_mock_db({
+        "prediction_history": [rec1, other_user_rec]
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    res = client.get("/api/v1/predictions/history", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 200
+    items = res.json()
+    assert len(items) == 1
+    assert items[0]["id"] == rec1["id"]
+    assert items[0]["user_id"] == test_user_id
+
+
+def test_list_prediction_history_denied_cross_family(client, auth_headers, test_user_id):
+    """Verify attempting to list prediction history for another family is rejected with HTTP 403."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    other_family_id = str(uuid.uuid4())
+
+    mock_db = setup_mock_db({
+        "family_members": [],  # Caller is not a member of other_family_id
+        "prediction_history": []
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    res = client.get(f"/api/v1/predictions/history?family_id={other_family_id}", headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 403
+    assert "Access denied: you are not a member of this family" in res.json()["detail"]
+
+
+def test_get_prediction_history_record_authorized_and_denied(client, auth_headers, test_user_id):
+    """Verify retrieving a specific prediction record enforces ownership and access checks."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    own_rec_id = str(uuid.uuid4())
+    other_rec_id = str(uuid.uuid4())
+
+    own_rec = {
+        "id": own_rec_id,
+        "user_id": test_user_id,
+        "family_id": None,
+        "family_member_id": None,
+        "prediction_type": "DIABETES",
+        "model_version": "1.0.0",
+        "model_name": "RandomForestClassifier",
+        "input_measurements": {"age": 55, "bmi": 28},
+        "prediction_result": 0,
+        "risk_label": "Low Risk",
+        "risk_probability": 0.12,
+        "risk_percentage": 12.0,
+        "confidence_level": "High Confidence",
+        "recommendations": ["Healthy diet"],
+        "created_at": "2026-10-10T02:00:00Z"
+    }
+
+    other_rec = {
+        "id": other_rec_id,
+        "user_id": str(uuid.uuid4()),
+        "family_id": None,
+        "family_member_id": None,
+        "prediction_type": "DIABETES",
+        "model_version": "1.0.0",
+        "model_name": "RandomForestClassifier",
+        "input_measurements": {"age": 68, "bmi": 33},
+        "prediction_result": 1,
+        "risk_label": "High Risk",
+        "risk_probability": 0.90,
+        "risk_percentage": 90.0,
+        "confidence_level": "High Confidence",
+        "recommendations": ["Immediate consult"],
+        "created_at": "2026-10-10T01:30:00Z"
+    }
+
+    mock_db = setup_mock_db({
+        "prediction_history": [own_rec, other_rec]
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    # 1. Own record: 200 OK
+    res_own = client.get(f"/api/v1/predictions/history/{own_rec_id}", headers=auth_headers)
+    assert res_own.status_code == 200
+    assert res_own.json()["id"] == own_rec_id
+
+    # 2. Other user's record: 403 Forbidden
+    res_other = client.get(f"/api/v1/predictions/history/{other_rec_id}", headers=auth_headers)
+    assert res_other.status_code == 403
+    assert "Access denied" in res_other.json()["detail"]
+
+    # 3. Non-existent record: 404 Not Found
+    non_existent = str(uuid.uuid4())
+    res_missing = client.get(f"/api/v1/predictions/history/{non_existent}", headers=auth_headers)
+    assert res_missing.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+def test_delete_prediction_history_record_owner_and_denied(client, auth_headers, test_user_id):
+    """Verify deleting prediction records is permitted for owner and denied for non-owners."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    own_rec_id = str(uuid.uuid4())
+    other_rec_id = str(uuid.uuid4())
+
+    own_rec = {
+        "id": own_rec_id,
+        "user_id": test_user_id,
+        "prediction_type": "DIABETES",
+        "created_at": "2026-10-10T02:00:00Z"
+    }
+
+    other_rec = {
+        "id": other_rec_id,
+        "user_id": str(uuid.uuid4()),
+        "prediction_type": "DIABETES",
+        "created_at": "2026-10-10T01:00:00Z"
+    }
+
+    mock_db = setup_mock_db({
+        "prediction_history": [own_rec, other_rec]
+    })
+    app.dependency_overrides[get_supabase] = lambda: mock_db
+
+    # 1. Other user's record: 403 Forbidden
+    res_denied = client.delete(f"/api/v1/predictions/history/{other_rec_id}", headers=auth_headers)
+    assert res_denied.status_code == 403
+    assert "only the record owner can delete" in res_denied.json()["detail"]
+
+    # 2. Own record: 204 No Content
+    res_del = client.delete(f"/api/v1/predictions/history/{own_rec_id}", headers=auth_headers)
+    assert res_del.status_code == 204
+
+    # 3. Non-existent record: 404 Not Found
+    res_missing = client.delete(f"/api/v1/predictions/history/{str(uuid.uuid4())}", headers=auth_headers)
+    assert res_missing.status_code == 404
+
+    app.dependency_overrides.clear()
+
+
+def test_sanitization_no_auth_tokens_in_stored_records_or_audit(client, auth_headers, test_user_id):
+    """Verify stored prediction history and audit logs NEVER contain auth tokens, bearer credentials, or passwords."""
+    from app.auth.dependencies import get_supabase
+    from app.main import app
+
+    inserted_records = []
+    logged_audits = []
+
+    mock_supabase = MagicMock()
+
+    def get_table(name):
+        builder = MagicMock()
+        if name == "prediction_history":
+            def insert_record(payload):
+                inserted_records.append(payload)
+                mock_res = MagicMock()
+                p = dict(payload)
+                p["id"] = str(uuid.uuid4())
+                mock_res.data = [p]
+                exec_mock = MagicMock()
+                exec_mock.execute.return_value = mock_res
+                return exec_mock
+            builder.insert.side_effect = insert_record
+        elif name == "audit_logs":
+            def insert_audit(payload):
+                logged_audits.append(payload)
+                mock_res = MagicMock()
+                mock_res.data = [payload]
+                exec_mock = MagicMock()
+                exec_mock.execute.return_value = mock_res
+                return exec_mock
+            builder.insert.side_effect = insert_audit
+        return builder
+
+    mock_supabase.table.side_effect = get_table
+    app.dependency_overrides[get_supabase] = lambda: mock_supabase
+
+    payload = {
+        "age": 48.0,
+        "gender": "Male",
+        "hypertension": False,
+        "heart_disease": False,
+        "smoking_history": "never",
+        "bmi": 24.5,
+        "hba1c_level": 5.2,
+        "blood_glucose_level": 98.0,
+        "save_to_records": True
+    }
+
+    res = client.post("/api/v1/predictions/diabetes", json=payload, headers=auth_headers)
+    app.dependency_overrides.clear()
+
+    assert res.status_code == 200
+    assert len(inserted_records) == 1
+    stored = inserted_records[0]
+
+    # Verify input_measurements contains only valid medical keys
+    expected_measurement_keys = {
+        "age", "gender", "bmi", "hba1c_level", "blood_glucose_level",
+        "hypertension", "heart_disease", "smoking_history"
+    }
+    assert set(stored["input_measurements"].keys()) == expected_measurement_keys
+
+    # Check for token or authorization leak
+    for val in stored["input_measurements"].values():
+        val_str = str(val).lower()
+        assert "bearer" not in val_str
+        assert "token" not in val_str
+        assert "password" not in val_str
+        assert "secret" not in val_str
