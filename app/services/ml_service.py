@@ -37,7 +37,10 @@ class DiabetesMLService:
     _model = None
 
     def __init__(self):
-        self._load_model()
+        try:
+            self._load_model()
+        except Exception as e:
+            logger.warning("Diabetes ML model could not be pre-loaded at startup: %s", e)
 
     @classmethod
     def get_instance(cls) -> "DiabetesMLService":
@@ -48,14 +51,15 @@ class DiabetesMLService:
     def _resolve_model_path(self) -> Path:
         base_dir = Path(__file__).resolve().parent.parent.parent
         primary_path = base_dir / "models" / "diabetes_model.pkl"
-        fallback_path = Path(r"C:\Users\HRISHIKESH\Downloads\diabetes_model (1).pkl")
-
         if primary_path.exists():
             return primary_path
-        if fallback_path.exists():
-            return fallback_path
+
+        cwd_path = Path.cwd() / "models" / "diabetes_model.pkl"
+        if cwd_path.exists():
+            return cwd_path
+
         raise FileNotFoundError(
-            f"Diabetes ML model file not found at {primary_path} or {fallback_path}"
+            f"Diabetes ML model file not found. Looked in {primary_path} and {cwd_path}"
         )
 
     def _load_model(self):

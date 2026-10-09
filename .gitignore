@@ -11,5 +11,5 @@ ENV/
 htmlcov/
 *.log
 *.pkl
-models/*.pkl
+!models/diabetes_model.pkl
 .DS_Store
