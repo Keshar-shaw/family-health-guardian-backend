@@ -8,9 +8,12 @@ from app.auth.jwt import UserTokenPayload
 from app.schemas.ml_prediction import (
     DiabetesPredictionRequest,
     DiabetesPredictionResponse,
+    HypertensionPredictionRequest,
+    HypertensionPredictionResponse,
     PredictionHistoryResponse
 )
 from app.services.ml_service import ml_service, EXPECTED_FEATURES
+from app.services.hypertension_service import hypertension_ml_service, EXPECTED_HYPERTENSION_FEATURES
 from app.services.audit import AuditService
 from app.schemas.audit_log import AuditAction, AuditResourceType
 from app.api.health_records import verify_member_access
@@ -202,6 +205,180 @@ def predict_diabetes_risk(
             resource_id=None,
             metadata={
                 "action_type": "ML_INFERENCE_DIABETES",
+                "risk_label": result.risk_label,
+                "risk_percentage": result.risk_percentage,
+                "confidence_level": result.confidence_level
+            }
+        )
+
+    return result
+
+
+@router.get("/hypertension/metadata", response_model=Dict[str, Any])
+def get_hypertension_model_metadata():
+    """Retrieve metadata, feature list, and clinical metric descriptions for the Hypertension ML model."""
+    expected_features = hypertension_ml_service.get_expected_features()
+    return {
+        "model_name": "RandomForestClassifier",
+        "disease_target": "Hypertension Risk",
+        "model_version": "1.0.0",
+        "features_count": len(expected_features),
+        "expected_features": expected_features,
+        "feature_details": {
+            "age": {"type": "float", "range": "0 - 120", "description": "Patient age in years (primary epidemiological risk factor)"},
+            "gender": {"type": "string", "options": ["Male", "Female", "Other"]},
+            "heart_disease": {"type": "boolean", "description": "Existing cardiovascular comorbidity"},
+            "smoking_history": {"type": "string", "options": ["never", "current", "former", "ever", "not current", "No Info"]},
+            "bmi": {"type": "float", "normal_range": "18.5 - 24.9", "description": "Body Mass Index (kg/m2)"},
+            "hba1c_level": {"type": "float", "normal_range": "< 5.7%", "prediabetes": "5.7 - 6.4%", "diabetes": ">= 6.5%"},
+            "blood_glucose_level": {"type": "float", "normal_fasting": "70 - 99 mg/dL", "diabetes": ">= 126 mg/dL fasting"},
+            "diabetes": {"type": "boolean", "description": "Diagnosed diabetes comorbidity"}
+        },
+        "regulatory_disclaimer": (
+            "This model provides statistical risk stratification based on demographic, lifestyle, "
+            "and metabolic factors. It does NOT predict continuous systolic/diastolic blood pressure (mmHg), "
+            "is NOT an FDA-cleared diagnostic device, and does NOT replace sphygmomanometer measurement."
+        )
+    }
+
+
+@router.post("/hypertension", response_model=HypertensionPredictionResponse)
+def predict_hypertension_risk(
+    req: HypertensionPredictionRequest,
+    current_user: UserTokenPayload = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase)
+):
+    """
+    Execute ML inference to predict patient hypertension risk and probability.
+    When save_to_records is True, validates family authorization and persists the prediction
+    to prediction_history with an immutable audit trail.
+    """
+    try:
+        result = hypertension_ml_service.predict(req)
+    except (RuntimeError, FileNotFoundError, ValueError) as e:
+        logger.error("Hypertension ML service unavailable: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Hypertension ML service is unavailable: {str(e)}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error during hypertension prediction inference: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Inference execution failed: {str(e)}"
+        )
+
+    # If persistence is requested, enforce authorization and save to prediction_history
+    if req.save_to_records:
+        family_id_str: Optional[str] = None
+        target_member_id_str: Optional[str] = None
+
+        if req.family_id:
+            try:
+                family_uuid = UUID(req.family_id)
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid family_id format")
+
+            # Verify caller is an active member of this family
+            fm_check = supabase.table("family_members") \
+                .select("*") \
+                .eq("family_id", str(family_uuid)) \
+                .eq("user_id", current_user.sub) \
+                .execute()
+
+            if not fm_check.data:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: you are not a member of this family"
+                )
+
+            family_id_str = str(family_uuid)
+            caller_member_id = fm_check.data[0]["id"]
+
+        if req.family_member_id:
+            try:
+                member_uuid = UUID(req.family_member_id)
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid family_member_id format")
+
+            # Verify caller has full-access consent for target family member
+            target_member = verify_member_access(
+                supabase=supabase,
+                family_member_id=member_uuid,
+                user_id=current_user.sub,
+                require_full_access=True
+            )
+            target_member_id_str = str(member_uuid)
+            family_id_str = str(target_member.get("family_id")) if target_member.get("family_id") else None
+
+        # Build sanitized record payload (NEVER stores tokens or auth credentials)
+        record_payload = {
+            "user_id": current_user.sub,
+            "family_id": family_id_str,
+            "family_member_id": target_member_id_str,
+            "prediction_type": "HYPERTENSION",
+            "model_version": "1.0.0",
+            "model_name": "RandomForestClassifier",
+            "input_measurements": {
+                "age": req.age,
+                "gender": req.gender.value,
+                "bmi": req.bmi,
+                "hba1c_level": req.hba1c_level,
+                "blood_glucose_level": req.blood_glucose_level,
+                "heart_disease": req.heart_disease,
+                "diabetes": req.diabetes,
+                "smoking_history": req.smoking_history.value
+            },
+            "prediction_result": result.prediction,
+            "risk_label": result.risk_label,
+            "risk_probability": result.risk_probability,
+            "risk_percentage": result.risk_percentage,
+            "confidence_level": result.confidence_level,
+            "recommendations": result.recommendations
+        }
+
+        try:
+            insert_res = supabase.table("prediction_history").insert(record_payload).execute()
+            if not insert_res.data:
+                raise RuntimeError("Empty response received from prediction_history insert")
+            saved_record = insert_res.data[0]
+            result.record_id = str(saved_record["id"])
+        except Exception as db_err:
+            logger.error("Failed to persist prediction history: %s", str(db_err), exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database failure: could not save prediction history: {str(db_err)}"
+            )
+
+        # Audit log the persistent creation
+        AuditService.log_action(
+            supabase=supabase,
+            actor_user_id=current_user.sub,
+            action=AuditAction.HEALTH_RECORD_CREATED.value,
+            resource_type=AuditResourceType.HEALTH_RECORD.value,
+            resource_id=UUID(result.record_id) if result.record_id else None,
+            family_id=UUID(family_id_str) if family_id_str else None,
+            family_member_id=UUID(target_member_id_str) if target_member_id_str else None,
+            metadata={
+                "action_type": "ML_PREDICTION_SAVED",
+                "prediction_type": "HYPERTENSION",
+                "risk_label": result.risk_label,
+                "risk_percentage": result.risk_percentage,
+                "confidence_level": result.confidence_level
+            }
+        )
+    else:
+        # Audit log pure inference without saving measurements to history
+        AuditService.log_action(
+            supabase=supabase,
+            actor_user_id=current_user.sub,
+            action=AuditAction.HEALTH_RECORD_CREATED.value,
+            resource_type=AuditResourceType.HEALTH_RECORD.value,
+            resource_id=None,
+            metadata={
+                "action_type": "ML_INFERENCE_HYPERTENSION",
                 "risk_label": result.risk_label,
                 "risk_percentage": result.risk_percentage,
                 "confidence_level": result.confidence_level

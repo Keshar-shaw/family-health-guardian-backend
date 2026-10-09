@@ -12,4 +12,6 @@ htmlcov/
 *.log
 *.pkl
 !models/diabetes_model.pkl
+!models/hypertension_model.pkl
 .DS_Store
+
