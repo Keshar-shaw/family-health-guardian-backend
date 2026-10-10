@@ -213,6 +213,22 @@ class PrefillPredictionResponse(BaseModel):
     hba1c_level: Optional[float] = Field(None, description="Most recent HbA1c reading if available")
     blood_glucose_level: Optional[float] = Field(None, description="Most recent blood glucose reading if available")
     source_notes: List[str] = Field(default_factory=list, description="Audit notes explaining data origins")
+class SymptomPredictionItem(BaseModel):
+    disease: str = Field(..., description="Predicted disease condition")
+    confidence_percent: float = Field(..., description="Estimated probability percentage (0-100%)")
+    description: str = Field(..., description="Clinical overview of condition")
+    precautions: List[str] = Field(default_factory=list, description="Recommended precautions")
 
 
+class SymptomCheckerRequest(BaseModel):
+    symptoms: List[str] = Field(..., min_length=1, description="List of patient symptoms, e.g. ['chills', 'high_fever', 'cough']")
+    top_k: int = Field(3, ge=1, le=10, description="Number of top candidates to return")
 
+
+class SymptomCheckerResponse(BaseModel):
+    top_disease: str = Field(..., description="Highest ranked disease match")
+    confidence_percent: float = Field(..., description="Confidence percentage for top prediction")
+    matched_symptoms: List[str] = Field(..., description="Recognized symptoms matched against model features")
+    unrecognized_symptoms: List[str] = Field(default_factory=list, description="Any unmapped symptoms provided")
+    top_predictions: List[SymptomPredictionItem] = Field(..., description="Top ranked disease predictions")
+    emergency_recommendation: str = Field(..., description="Clinical triage guidance")

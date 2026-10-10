@@ -13,10 +13,13 @@ from app.schemas.ml_prediction import (
     PredictionHistoryResponse,
     PredictionTrendsResponse,
     TrendDataPoint,
-    PrefillPredictionResponse
+    PrefillPredictionResponse,
+    SymptomCheckerRequest,
+    SymptomCheckerResponse
 )
 from app.services.ml_service import ml_service, EXPECTED_FEATURES
 from app.services.hypertension_service import hypertension_ml_service, EXPECTED_HYPERTENSION_FEATURES
+from app.services.symptom_checker_service import symptom_checker_service
 from app.services.audit import AuditService
 from app.schemas.audit_log import AuditAction, AuditResourceType
 from app.services.notifications import NotificationService
@@ -751,5 +754,52 @@ def prefill_prediction_measurements(
         notes.append("No previous health records or assessments found; blank profile initialized.")
 
     return PrefillPredictionResponse(**prefill)
+
+
+@router.get("/symptoms", response_model=Dict[str, Any])
+def get_supported_symptoms():
+    """
+    Retrieve the full library of 131 clinical symptoms supported by the Multi-Disease Diagnostic model.
+    """
+    symptoms = symptom_checker_service.get_symptoms()
+    return {
+        "total_symptoms": len(symptoms),
+        "symptoms": symptoms
+    }
+
+
+@router.get("/diseases", response_model=Dict[str, Any])
+def get_supported_diseases():
+    """
+    Retrieve all 41 diagnosable diseases with detailed clinical descriptions and precautions.
+    """
+    metadata = symptom_checker_service.get_disease_metadata()
+    return {
+        "total_diseases": len(metadata),
+        "diseases": metadata
+    }
+
+
+@router.post("/symptom-checker", response_model=SymptomCheckerResponse)
+def run_symptom_checker(req: SymptomCheckerRequest):
+    """
+    Multi-Disease Symptom Checker ML inference.
+    Takes a list of patient-reported symptoms, returns the top probable diseases,
+    confidence levels, clinical descriptions, tailored precautions, and urgent triage advice.
+    """
+    try:
+        result = symptom_checker_service.predict(selected_symptoms=req.symptoms, top_k=req.top_k)
+        return SymptomCheckerResponse(**result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error("Error in symptom checker ML model inference: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Multi-disease diagnostic engine is temporarily unavailable. Please retry shortly."
+        )
 
 

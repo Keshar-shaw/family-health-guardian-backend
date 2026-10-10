@@ -13,5 +13,7 @@ htmlcov/
 *.pkl
 !models/diabetes_model.pkl
 !models/hypertension_model.pkl
+!models/multi_disease_model.pkl
+models/archived_legacy_models/
 .DS_Store
 
