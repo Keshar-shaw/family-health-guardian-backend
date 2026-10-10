@@ -2,589 +2,515 @@
                     FAMILY HEALTH GUARDIAN - FRONTEND REQUIREMENTS
               Complete Comprehensive Frontend Specification & API Guide
 ================================================================================
-Document Version : 3.0.0 (Production & Full ML Suite Edition)
-Backend Status   : Fully Audited (223/223 Tests Passing across 15 Modules)
-Backend Stack    : FastAPI, Supabase PostgreSQL, Supabase Auth + JWT, PostgreSQL RLS, Scikit-Learn
+Document Version : 4.0.0 (Unified Full-Stack & Multi-Disease ML Suite Edition)
+Backend Status   : Fully Audited (229/229 Tests Passing across 16 Modules)
+Backend Stack    : FastAPI, Supabase PostgreSQL, Supabase Auth (ES256 JWKS), PostgreSQL RLS, Scikit-Learn
 Motto            : "One Family. One Health Center. One Trusted Guardian."
 ================================================================================
 
 TABLE OF CONTENTS:
 --------------------------------------------------------------------------------
-1. EXECUTIVE SUMMARY & ARCHITECTURAL FOUNDATION
+1. EXECUTIVE ARCHITECTURAL SUMMARY & SECURITY
 2. RECOMMENDED FRONTEND TECH STACK & LIBRARIES
-3. GLOBAL STATE & CONTEXT MANAGEMENT
-4. COMPREHENSIVE ROUTE & PAGE HIERARCHY
-5. DETAILED SCREEN-BY-SCREEN SPECIFICATIONS
-   5.1 Authentication & Onboarding (/login, /register)
-   5.2 User Profile Management (/profile)
-   5.3 Family Hub & Member RBAC (/families, /families/:id)
-   5.4 Consent & Access Management (/consents)
-   5.5 Health Records & Medical Summary (/health-records)
-   5.6 Medicines & Prescriptions Catalog (/medicines)
-   5.7 Medicine Schedules & Intake Adherence Timeline (/medicine-schedules)
-   5.8 Medical Reports & Secure Document Viewer (/medical-reports)
-   5.9 Emergency Contacts & Priority Roster (/emergency-contacts)
-   5.10 Emergency SOS Broadcast & GPS Geolocation Capture (/emergency/sos)
-   5.11 SOS Incident History & Filtering (/emergency/sos/history)
-   5.12 Notification Center & Emergency Alerts (/notifications)
-   5.13 Immutable Audit Trail & Activity Logs (/audit-logs)
-   5.14 Diabetes ML Risk Assessment (/predictions/diabetes)
-   5.15 Hypertension ML Risk Assessment (/predictions/hypertension)
-   5.16 Feature Attribution & Explainability Panel (Patient Risk Drivers)
-   5.17 Longitudinal Risk Trends & Trajectory Analytics (/predictions/trends)
-   5.18 One-Click Biometric Prefill from Clinical Records (/predictions/prefill)
-   5.19 Unified ML Prediction History & Record Management (/predictions/history)
-6. COMPLETE BACKEND API ENDPOINTS REFERENCE & CONTRACTS (42+ ROUTES)
-7. FULL TYPESCRIPT DATA MODELS & INTERFACES (STRICT TYPES)
-8. FRONTEND SECURITY, VALIDATION & ERROR HANDLING
-9. ENVIRONMENT CONFIGURATION (.env)
-10. STEP-BY-STEP IMPLEMENTATION ROADMAP
+3. GLOBAL STATE & CONTEXT ARCHITECTURE
+4. COMPLETE SCREEN-BY-SCREEN UI/UX SPECIFICATIONS
+   4.1  Authentication & Session Onboarding (/login, /register)
+   4.2  User Profile Management (/profile)
+   4.3  Family Hub & RBAC Member Roster (/families, /families/:id)
+   4.4  Consent & Data Sharing Access Control (/consents)
+   4.5  Health Records & Clinical Summary (/health-records)
+   4.6  Medicines & Prescriptions Catalog (/medicines)
+   4.7  Medicine Schedules & Intake Adherence (/medicine-schedules)
+   4.8  Medical Reports & Secure Document Viewer (/medical-reports)
+   4.9  Emergency Contacts & Priority Roster (/emergency-contacts)
+   4.10 Emergency SOS Trigger with GPS Geolocation (/emergency/sos)
+   4.11 SOS Incident History & Resolution (/emergency/sos/history)
+   4.12 Notification Center & Emergency Alerts (/notifications)
+   4.13 Tamper-Evident Audit Trail & Activity Logs (/audit-logs)
+   4.14 Diabetes ML Stacking Risk Assessment (/predictions/diabetes)
+   4.15 Hypertension ML Risk Assessment (/predictions/hypertension)
+   4.16 Multi-Disease Symptom Diagnostic Checker (/predictions/symptom-checker) [NEW]
+   4.17 Clinical Feature Attribution & Patient Risk Drivers
+   4.18 Longitudinal Risk Trends & Trajectory Analytics (/predictions/trends)
+   4.19 One-Click Biometric Auto-Prefill (/predictions/prefill)
+   4.20 Unified Prediction Records Management (/predictions/history)
+5. COMPLETE BACKEND API ENDPOINTS & PAYLOAD REFERENCE (45+ ROUTES)
+6. FULL TYPESCRIPT DATA MODELS & INTERFACES (STRICT TYPES)
+7. ENVIRONMENT CONFIGURATION (.env)
+8. STEP-BY-STEP IMPLEMENTATION ROADMAP FOR FRONTEND DEVELOPERS
 
 ================================================================================
-1. EXECUTIVE SUMMARY & ARCHITECTURAL FOUNDATION
+1. EXECUTIVE ARCHITECTURAL SUMMARY & SECURITY
 ================================================================================
 The Family Health Guardian frontend is an enterprise-grade, consent-driven, 
-role-aware healthcare web application. It connects family members, patients, 
-and designated guardians in a single privacy-first portal.
+privacy-first healthcare management application. It connects patients, family
+members, and healthcare guardians in a single authenticated portal.
 
 Core Architectural Tenets:
-1. Security Identity (auth.uid()):
-   - Authentication is performed via Supabase Auth (Email/Password).
-   - The frontend forwards the Bearer JWT on every API request.
-   - The backend enforces auth.uid() directly on every database operation.
+1. Authentication & Identity:
+   - Supabase Auth handles user signup, login, password resets, and session tokens.
+   - Access tokens are signed using modern asymmetric ES256 (ECDSA) with project JWKS.
+   - Every outgoing API request MUST attach: `Authorization: Bearer <access_token>`.
 2. Zero-Trust Family Context & Consent:
-   - The frontend never assumes permissions. Client-supplied family_member_id is 
-     verified against ownership or active consent (READ_ONLY vs FULL_ACCESS).
-   - UI elements (Edit, Delete, Add Schedule, Save ML Assessment) dynamically adapt
-     based on the active user's permissions.
-3. Private Medical Storage:
-   - Report files are never stored in PostgreSQL as blobs; they reside in Supabase Storage.
-   - Uploads go via POST /medical-reports; downloads render secure, signed URLs 
-     with short 5-minute expiries.
+   - Access to dependent family members requires active family membership and consent.
+   - Roles: ADMIN (full family management), GUARDIAN (caregiver access), MEMBER (standard patient).
+   - Consents: READ_ONLY vs FULL_ACCESS with statuses PENDING, ACTIVE, REVOKED, DENIED.
+3. Private Medical Documents:
+   - PDF/Image reports reside in Supabase Storage buckets.
+   - The frontend requests short-lived 5-minute pre-signed URLs to display/download documents.
 4. Privacy-First Emergency SOS:
-   - Location is captured ONLY during an explicit SOS trigger (3-second hold).
-   - No continuous background tracking.
-5. Dual-Engine Machine Learning & Clinical Explainability:
-   - Two specialized Scikit-Learn Random Forest models:
-     a) Diabetes Risk Classification (ROC-AUC ~0.83, positive recall prioritized).
-     b) Hypertension Risk Classification (ROC-AUC ~0.76, positive recall prioritized).
-   - Explainable AI: Per-patient local feature attribution (`feature_impacts`) highlighting
-     individual risk drivers (HIGH_RISK_FACTOR, MODERATE_RISK_FACTOR, PROTECTIVE_FACTOR).
-   - Longitudinal Risk Tracking: Trajectory calculation (IMPROVING, WORSENING, STABLE)
-     across historical assessments with delta percentage analytics.
-   - One-Click Prefill: Seamlessly pulls documented chronic conditions from health records
-     and latest physical vitals from prediction history.
-   - Automated Critical-Risk Alerts: High-confidence critical predictions (>= 75% diabetes,
-     >= 70% hypertension) automatically trigger emergency notifications to family guardians.
-6. Tamper-Evident Audit Trail:
-   - All healthcare operations (view, create, update, delete, ML inference) are logged.
-   - Passwords, tokens, and secrets are sanitized before persistence.
+   - Geolocation is requested ONLY on an intentional 3-second SOS button hold.
+   - No continuous background tracking. Sends coordinates, address, and battery percentage.
+5. Tri-Engine Machine Learning Suite:
+   - Engine 1: Two-Tier Stacking Super Learner for Diabetes (Random Forest + HistGB + Logistic Regression meta-learner, 97.52% ROC-AUC).
+   - Engine 2: Soft-Voting Blended Ensemble for Hypertension (13 physiological vitals).
+   - Engine 3: Multi-Disease Symptom Diagnostic Model (Random Forest Multiclass covering 41 clinical diseases and 131 symptoms).
+   - Automated Emergency Triage: High-risk predictions automatically alert designated guardians.
+6. Immutable Audit Trail:
+   - All healthcare operations (view, modify, delete, evaluate) generate an immutable audit log.
 
 ================================================================================
 2. RECOMMENDED FRONTEND TECH STACK & LIBRARIES
 ================================================================================
-- Framework: React 18/19 or Next.js (App Router) or Vite + React
+- Framework: React 18/19 or Vite + React or Next.js (App Router)
 - Language: TypeScript (Strict mode enabled)
-- Styling: Tailwind CSS or Vanilla CSS Modules (modern healthcare color palette:
-  Slate-900 background/text, Emerald-500 for low risk, Rose-500 for high risk,
-  Cyan-500 for primary actions, Amber-500 for moderate risk)
-- State & Server Cache: 
-  * TanStack Query (React Query) v5 for API caching, pagination & auto-invalidation
-  * Zustand or React Context for Active Family / Member selection
-- Authentication: `@supabase/supabase-js` (handles JWT, session storage & auto-refresh)
+- Styling: Tailwind CSS (Recommended Color Palette: Slate-900 background, Emerald-500 Low Risk, Rose-500 High Risk, Cyan-500 Primary Action, Amber-500 Moderate Risk)
+- Client State & Caching:
+  * TanStack Query (React Query) v5 for server state caching, pagination, and optimistic updates
+  * Zustand or React Context for Active Family and Active Member switching
+- Backend Authentication: `@supabase/supabase-js` (handles JWT, session storage & auto-refresh)
 - HTTP Client: Axios (configured with auth interceptor & automatic 401 retry)
 - Icons: Lucide React (`lucide-react`)
-- Maps (SOS Location): Leaflet (`react-leaflet`) or Mapbox GL (for GPS coordinate display)
-- Charts (ML Trends & Explainability): Recharts or Chart.js (for trajectory lines & feature bars)
+- Maps (SOS GPS View): Leaflet (`react-leaflet`) or Mapbox GL
+- Charts (ML Trends & Symptom Confidence): Recharts or Chart.js
 - Form Validation: React Hook Form + Zod (mirroring backend Pydantic schemas)
-- Toast / Alerts: Sonner or React Hot Toast
+- Alerts & Toasts: Sonner or React Hot Toast
 
 ================================================================================
-3. GLOBAL STATE & CONTEXT MANAGEMENT
+3. GLOBAL STATE & CONTEXT ARCHITECTURE
 ================================================================================
-The application requires 4 global providers:
+The frontend should expose three global contexts:
 
 1. AuthContext:
-   - Stores current Supabase `user`, `session`, `accessToken`.
-   - Handles login, signup, logout, session expiration refresh.
-   - Profile state (`GET /profiles/me`).
+   - `user`: Supabase User object (`id`, `email`, `user_metadata`)
+   - `session`: Supabase Session (`access_token`, `refresh_token`, `expires_at`)
+   - `profile`: User profile fetched from `GET /api/v1/profiles/me`
+   - `signIn(email, password)`
+   - `signUp(email, password, fullName)`
+   - `signOut()`
 
 2. FamilyContext:
-   - `families`: List of families user belongs to (`GET /families`).
-   - `activeFamily`: Currently selected family.
-   - `activeFamilyMembers`: Members of active family (`GET /families/{id}`).
-   - `selectedMemberId`: Target member currently being viewed/managed.
-   - Role state: Whether current user is `ADMIN` or `MEMBER` in `activeFamily`.
+   - `families`: List of families caller belongs to (`GET /api/v1/families`)
+   - `activeFamily`: Currently selected Family object
+   - `activeMember`: Currently selected Family Member (or self)
+   - `callerRole`: Caller's role in active family (`ADMIN`, `GUARDIAN`, `MEMBER`)
+   - `hasPermission(permission: 'READ_ONLY' | 'FULL_ACCESS')`: Consent validator
 
-3. ConsentContext:
-   - Active permissions for the current user across family members (`READ_ONLY` vs `FULL_ACCESS`).
-   - Determines visibility and disabled state of action buttons.
-
-4. NotificationContext:
-   - Unread badge counter (`GET /notifications?status=PENDING`).
-   - Polling / Supabase Realtime channel for incoming alerts (Medicine reminders & SOS alerts).
-   - Audio chime on critical high-risk health alerts.
+3. NotificationContext:
+   - `unreadCount`: Integer count of unread alerts
+   - `notifications`: Top recent alerts
+   - `markAsRead(id)` / `markAllAsRead()`
 
 ================================================================================
-4. COMPREHENSIVE ROUTE & PAGE HIERARCHY
-================================================================================
-/ (Landing Page / Public Overview)
-├── /login (Supabase Auth Login)
-├── /register (New User Registration)
-├── /profile (User Profile Settings)
-├── /dashboard (Executive Health Hub & Daily Overview)
-├── /families (Family Management & Member Invitation)
-│   └── /families/:id (Family Workspace & Member Roster)
-├── /consents (Consent Hub: Granted by Me / Granted to Me)
-├── /health-records (Patient Health Records & Clinical Baseline)
-├── /medicines (Prescription & Medicine Catalog)
-├── /medicine-schedules (Adherence Timeline & Dose Reminders)
-├── /medical-reports (Secure Medical Document Vault & Signed Viewer)
-├── /emergency-contacts (Priority Contact Roster & Guardians)
-├── /emergency/sos (Live SOS Broadcast & GPS Trigger)
-├── /emergency/sos/history (SOS Incident Log & Resolution Archive)
-├── /notifications (Notification Feed & Alert Center)
-├── /audit-logs (Immutable Activity Trail & Security Log)
-└── /predictions (AI Health Intelligence & ML Predictive Suite)
-    ├── /predictions/diabetes (Diabetes Risk Assessment & Explainability)
-    ├── /predictions/hypertension (Hypertension Risk Assessment & Explainability)
-    ├── /predictions/trends (Longitudinal Trajectory Analytics & Charts)
-    └── /predictions/history (Prediction History Log & Detail Drawer)
-
-================================================================================
-5. DETAILED SCREEN-BY-SCREEN SPECIFICATIONS
+4. COMPLETE SCREEN-BY-SCREEN UI/UX SPECIFICATIONS
 ================================================================================
 
 --------------------------------------------------------------------------------
-5.1 Authentication & Onboarding (/login, /register)
+4.1 Authentication & Onboarding (/login, /register)
 --------------------------------------------------------------------------------
-- Supabase Auth integration:
-  * Email + Password authentication.
-  * Auto-redirect to `/dashboard` upon session establishment.
-  * Form validation: valid email format, minimum 8-character password.
-  * Error toast for invalid credentials or unconfirmed email.
-
---------------------------------------------------------------------------------
-5.2 User Profile Management (/profile)
---------------------------------------------------------------------------------
-- Endpoints:
-  * `GET /profiles/me`
-  * `PUT /profiles/me` -> `{ full_name?, avatar_url? }`
 - Features:
-  * Avatar photo preview & URL input.
-  * Full name editor.
-  * Display authenticated email and account creation timestamp.
+  * Clean, responsive split-screen card with healthcare branding.
+  * Inputs: Email Address, Password, Full Name (for registration).
+  * Direct Supabase auth integration (`supabase.auth.signInWithPassword`).
+  * On success: stores JWT in storage and redirects to `/dashboard`.
+  * Automatic profile bootstrap via `handle_new_user()` trigger.
 
 --------------------------------------------------------------------------------
-5.3 Family Hub & Member RBAC (/families, /families/:id)
+4.2 User Profile Management (/profile)
+--------------------------------------------------------------------------------
+- Endpoint: `GET /api/v1/profiles/me`, `PUT /api/v1/profiles/me`
+- Fields: Full Name, Date of Birth, Gender, Phone Number, Avatar URL.
+- Validation: Phone number validation, date picker max = today.
+
+--------------------------------------------------------------------------------
+4.3 Family Hub & Member Roster (/families, /families/:id)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /families` -> `{ name }`
-  * `GET /families`
-  * `GET /families/{id}`
-  * `POST /families/{id}/members` -> `{ user_id, role: "ADMIN" | "MEMBER" }`
-  * `DELETE /families/{id}/members/{user_id}`
-- Features:
-  * Create new family workspace.
-  * Member list showing roles (`ADMIN` badge in purple, `MEMBER` badge in slate).
-  * Admins can invite/add new members by user ID and remove existing members.
-  * Non-admins see read-only roster.
+  * `POST /api/v1/families` (Creates family; creator is auto-assigned as ADMIN)
+  * `GET /api/v1/families` (Lists all user's families)
+  * `GET /api/v1/families/:id` (Family details with members)
+  * `POST /api/v1/families/:id/members` (Adds member; ADMIN required)
+  * `DELETE /api/v1/families/:id/members/:userId` (Removes member; self or ADMIN)
+- UI Components:
+  * Family Switcher Dropdown in top navigation bar.
+  * Member Card Grid displaying Avatar, Name, Role Badge (ADMIN, GUARDIAN, MEMBER), Joined Date.
+  * "Create Family" Modal.
+  * "Add Member" Modal with User ID input and Role selector.
 
 --------------------------------------------------------------------------------
-5.4 Consent & Access Management (/consents)
+4.4 Consent & Access Management (/consents)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /consents` -> `{ grantee_id, family_id, permission_level }`
-  * `GET /consents`
-  * `PATCH /consents/{id}` -> `{ status?: "REVOKED", permission_level?: "FULL_ACCESS" | "READ_ONLY" }`
-- Features:
-  * Two Tabs: "Granted by Me" (I am grantor) vs "Granted to Me" (I am grantee).
-  * Status badges: `ACTIVE` (green), `REVOKED` (gray), `EXPIRED` (amber).
-  * Permission badges: `FULL_ACCESS` (allows edits, uploads, deletion) vs `READ_ONLY` (viewing only).
-  * Grant access modal with grantee user selector, family picker, and permission tier.
-  * One-click "Revoke Access" button with confirmation prompt.
+  * `POST /api/v1/consents` (Request/Grant consent)
+  * `GET /api/v1/consents` (List consents where caller is granter or grantee)
+  * `PUT /api/v1/consents/:id/status` (Update status: ACTIVE, REVOKED, DENIED)
+  * `DELETE /api/v1/consents/:id` (Revoke and delete consent)
+- UI Components:
+  * Two Tabs: "Requests Received" (Grant or Deny) vs "Consents Granted" (Revoke).
+  * Badge indicator for Permission Level (`READ_ONLY` vs `FULL_ACCESS`).
 
 --------------------------------------------------------------------------------
-5.5 Health Records & Medical Summary (/health-records)
+4.5 Health Records & Clinical Summary (/health-records)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /health-records` -> `{ family_member_id, blood_group?, allergies?, chronic_conditions?, medical_history?, emergency_notes? }`
-  * `GET /health-records?family_member_id={id}`
-  * `GET /health-records/{id}`
-  * `PUT /health-records/{id}`
-  * `DELETE /health-records/{id}`
-- Features:
-  * Comprehensive patient clinical baseline card:
-    - Blood group badge (e.g., A+, O-, B+).
-    - Chronic conditions tag list (e.g., "Essential Hypertension", "Type 2 Diabetes").
-    - Allergies warning banner.
-    - Medical history summary.
-    - Critical emergency notes displayed with red alert border.
-  * Add/Edit modal with permission checks (disabled if user only has READ_ONLY consent).
+  * `POST /api/v1/health-records`
+  * `GET /api/v1/health-records/member/:memberId`
+  * `GET /api/v1/health-records/:id`
+  * `PUT /api/v1/health-records/:id`
+  * `DELETE /api/v1/health-records/:id`
+- Fields: Blood Type, Allergies, Chronic Conditions, Current Medications, Medical History, Vitals JSON, Notes.
+- Permission Guard: Requires ownership or active consent on the target member.
 
 --------------------------------------------------------------------------------
-5.6 Medicines & Prescriptions Catalog (/medicines)
+4.6 Medicines Catalog (/medicines)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /medicines` -> `{ family_member_id, medicine_name, dosage, frequency, instructions?, start_date?, end_date?, is_active? }`
-  * `GET /medicines?family_member_id={id}&is_active={bool}`
-  * `GET /medicines/{id}`
-  * `PUT /medicines/{id}`
-  * `DELETE /medicines/{id}`
-- Features:
-  * Filter pills by "Active Medications" vs "Past / Completed".
-  * Card view showing medicine name, dosage (e.g., 500mg), frequency (e.g., Twice daily), and instructions.
-  * Direct action button: "Schedule Dose Reminders" leading to `/medicine-schedules`.
+  * `POST /api/v1/medicines`
+  * `GET /api/v1/medicines/family/:familyId`
+  * `GET /api/v1/medicines/:id`
+  * `PUT /api/v1/medicines/:id`
+  * `DELETE /api/v1/medicines/:id`
+- Fields: Name, Dosage, Dosage Form (Tablet, Capsule, Syrup, Injection), Frequency, Instructions.
 
 --------------------------------------------------------------------------------
-5.7 Medicine Schedules & Intake Adherence Timeline (/medicine-schedules)
+4.7 Medicine Schedules & Intake Adherence (/medicine-schedules)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /medicine-schedules` -> `{ medicine_id, scheduled_time, day_of_week?, dose_quantity?, reminder_enabled? }`
-  * `GET /medicine-schedules?medicine_id={id}`
-  * `PUT /medicine-schedules/{id}`
-  * `DELETE /medicine-schedules/{id}`
-  * `POST /medicine-logs` -> `{ medicine_id, schedule_id?, status: "TAKEN"|"MISSED"|"SKIPPED", taken_at?, notes? }`
-  * `GET /medicine-logs?family_member_id={id}&start_date={date}&end_date={date}`
-- Features:
-  * Daily chronological medication timeline:
-    - Morning, Afternoon, Evening, Night blocks.
-    - One-click dose action buttons: "Mark as Taken", "Skip", "Missed".
-  * Adherence percentage calculation widget (% doses taken on time over last 7/30 days).
+  * `POST /api/v1/medicine-schedules`
+  * `GET /api/v1/medicine-schedules/member/:memberId`
+  * `POST /api/v1/medicine-logs` (Log dose: TAKEN, MISSED, SKIPPED)
+  * `GET /api/v1/medicine-logs/member/:memberId`
+- UI Components:
+  * Daily Timeline View (Morning, Afternoon, Evening, Night).
+  * Quick Actions: "Mark as Taken", "Skip Dose", "Missed Dose" with notes.
+  * Adherence Rate Progress Bar (e.g. "92% Adherence this week").
 
 --------------------------------------------------------------------------------
-5.8 Medical Reports & Secure Document Viewer (/medical-reports)
+4.8 Medical Reports & Secure Document Viewer (/medical-reports)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /medical-reports` (Multipart form-data: file, family_member_id, report_type?, report_date?, description?)
-  * `GET /medical-reports?family_member_id={id}&report_type={type}`
-  * `GET /medical-reports/{id}` (Returns signed download URL valid for 5 minutes)
-  * `DELETE /medical-reports/{id}`
-- Features:
-  * Drag-and-drop document upload (accepts PDF, PNG, JPG up to 15MB).
-  * Report type categories: LAB_REPORT, PRESCRIPTION, DISCHARGE_SUMMARY, IMAGING_SCAN, OTHER.
-  * In-app secure document viewer modal for signed URL previews.
-  * Audit verification: view/download actions generate immutable audit logs.
+  * `POST /api/v1/medical-reports` (Multipart form-data: file + report metadata)
+  * `GET /api/v1/medical-reports/member/:memberId`
+  * `GET /api/v1/medical-reports/:id/download-url` (Returns signed 5-minute URL)
+  * `DELETE /api/v1/medical-reports/:id`
+- UI Components:
+  * Drag-and-drop file uploader supporting PDF, PNG, JPG, JPEG (max 10MB).
+  * Report cards showing Report Type (Blood Test, Imaging, Prescription, Discharge Summary), Date, Doctor.
+  * Modal PDF/Image preview using the secure signed download URL.
 
 --------------------------------------------------------------------------------
-5.9 Emergency Contacts & Priority Roster (/emergency-contacts)
+4.9 Emergency Contacts & Priority Roster (/emergency-contacts)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /emergency-contacts` -> `{ family_member_id, name, relationship?, phone, email?, priority, is_active }`
-  * `GET /emergency-contacts?family_member_id={id}`
-  * `PUT /emergency-contacts/{id}`
-  * `DELETE /emergency-contacts/{id}`
-- Features:
-  * Ranked priority list (Priority 1 = primary first responder).
-  * Direct "Call" and "SMS" click-to-contact links (`tel:` and `sms:`).
-  * Toggle active/inactive status.
+  * `POST /api/v1/emergency-contacts`
+  * `GET /api/v1/emergency-contacts/member/:memberId`
+  * `PUT /api/v1/emergency-contacts/:id`
+  * `DELETE /api/v1/emergency-contacts/:id`
+- Fields: Contact Name, Relationship, Phone Number, Priority (1 to 5), Notification Preferences.
 
 --------------------------------------------------------------------------------
-5.10 Emergency SOS Broadcast & GPS Geolocation Capture (/emergency/sos)
+4.10 Emergency SOS Trigger with GPS Geolocation (/emergency/sos)
+--------------------------------------------------------------------------------
+- Endpoint: `POST /api/v1/emergency-sos`
+- Fields: `family_id`, `message`, `latitude`, `longitude`, `address`, `battery_percentage`
+- UI / Interaction:
+  * Large, pulsating Red SOS Button.
+  * Safety Delay: Requires pressing and holding for 3 full seconds (with visual countdown ring) to prevent accidental triggers.
+  * Automatic `navigator.geolocation.getCurrentPosition()` query upon trigger.
+  * Immediately creates broadcast notifications for all family guardians.
+
+--------------------------------------------------------------------------------
+4.11 SOS Incident History (/emergency/sos/history)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `POST /emergency/sos` -> `{ family_member_id, latitude?, longitude?, accuracy?, timestamp?, notes? }`
-- Features:
-  * Prominent Emergency SOS button: Requires 3-second deliberate hold to prevent accidental triggers.
-  * Browser Geolocation API capture: Retrieves current latitude, longitude, and accuracy radius.
-  * Audio countdown & visual pulse animation during hold.
-  * On dispatch: Broadcasts immediate alerts to all designated emergency contacts & family guardians.
+  * `GET /api/v1/emergency-sos/family/:familyId`
+  * `PUT /api/v1/emergency-sos/:id/resolve` (Marks emergency as RESOLVED with notes)
+- UI Components:
+  * Interactive Map Pin (Leaflet/Mapbox) rendering incident latitude/longitude.
+  * Status Badge: ACTIVE (pulsing red) vs RESOLVED (green).
 
 --------------------------------------------------------------------------------
-5.11 SOS Incident History & Filtering (/emergency/sos/history)
+4.12 Notification Center & Alerts (/notifications)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `GET /emergency/sos/history?family_member_id={id}&status={status}&limit=20&offset=0`
-  * `GET /emergency/sos/{id}`
-  * `PATCH /emergency/sos/{id}/status` -> `{ status: "ACKNOWLEDGED"|"RESOLVED"|"CANCELLED", notes? }`
-- Features:
-  * Incident feed with Status badges: `TRIGGERED` (red pulsing), `ACKNOWLEDGED` (amber), `RESOLVED` (green), `CANCELLED` (gray).
-  * Interactive GPS map modal showing pin marker with latitude/longitude coordinates and Google Maps directions link.
-  * Incident resolution drawer: Guardians can mark incident as Acknowledged or Resolved with notes.
+  * `GET /api/v1/notifications` (Query param: `unread_only=true`)
+  * `PUT /api/v1/notifications/:id/read`
+  * `PUT /api/v1/notifications/read-all`
+- Notification Types: `EMERGENCY_SOS`, `CRITICAL_HEALTH_ALERT`, `MEDICINE_REMINDER`, `CONSENT_REQUEST`, `SYSTEM`.
 
 --------------------------------------------------------------------------------
-5.12 Notification Center & Emergency Alerts (/notifications)
+4.13 Audit Trail & Activity Logs (/audit-logs)
+--------------------------------------------------------------------------------
+- Endpoint: `GET /api/v1/audit-logs`
+- Displays chronological audit logs with Timestamp, Action (CREATE, READ, UPDATE, DELETE, PREDICTION), Resource Type, IP Address, and sanitize metadata.
+
+--------------------------------------------------------------------------------
+4.14 Diabetes ML Stacking Risk Assessment (/predictions/diabetes)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `GET /notifications?status={status}&type={type}&limit=50&offset=0`
-  * `PATCH /notifications/{id}/read`
-- Features:
-  * Notification types:
-    - `MEDICINE_REMINDER` (Blue pill icon)
-    - `EMERGENCY_SOS` (Red pulsing alert icon)
-  * Unread filter tab with "Mark All as Read" action.
-  * High-risk critical prediction alerts trigger emergency SOS notification cards.
+  * `GET /api/v1/predictions/diabetes/metadata` (Derives input schema and valid ranges)
+  * `POST /api/v1/predictions/diabetes` (Executes inference)
+  * `GET /api/v1/predictions/prefill/member/:memberId` (One-click vitals prefill)
+- Inputs:
+  * Age (0 - 120)
+  * Gender (Male, Female, Other)
+  * Hypertension (Boolean toggle)
+  * Heart Disease (Boolean toggle)
+  * Smoking History (never, current, former, ever, not current, No Info)
+  * BMI (10.0 - 80.0)
+  * HbA1c Level (3.0 - 20.0%)
+  * Blood Glucose Level (30 - 600 mg/dL)
+  * Optional: `family_id`, `family_member_id`, `save_to_records: true`
+- Outputs:
+  * `risk_label` ("Low Risk" / "High Risk")
+  * `risk_percentage` (e.g. 84.5%)
+  * `confidence_level` ("High Confidence", "Moderate Confidence", "Low Confidence")
+  * `feature_impacts`: Local feature attribution (Risk Drivers vs Protective Factors)
+  * `recommendations`: Actionable clinical guidelines
+  * Automated Emergency Trigger: If risk >= 75%, family guardians receive immediate Critical Health Alert.
 
 --------------------------------------------------------------------------------
-5.13 Immutable Audit Trail & Activity Logs (/audit-logs)
+4.15 Hypertension ML Risk Assessment (/predictions/hypertension)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `GET /audit-logs?family_id={id}&family_member_id={id}&action={action}&resource_type={type}&limit=50&offset=0`
-- Features:
-  * Audit table with Timestamp, Actor User ID, Action Badge, Target Entity, and Safe Context.
-  * Filter by resource: `HEALTH_RECORD`, `MEDICINE`, `MEDICAL_REPORT`, `EMERGENCY_CONTACT`, `SOS_EVENT`.
-  * Security reassurance banner: "Audit logs are protected by database trigger and are strictly immutable."
+  * `GET /api/v1/predictions/hypertension/metadata`
+  * `POST /api/v1/predictions/hypertension`
+- Inputs:
+  * Age, Gender, Heart Disease, Smoking History, BMI, HbA1c Level, Blood Glucose Level, Diabetes (Boolean toggle).
+- Outputs:
+  * Binary prediction, risk label, risk percentage, feature attributions, recommendations.
+  * Automated Emergency Trigger: If risk >= 70%, family guardians receive immediate Critical Health Alert.
 
 --------------------------------------------------------------------------------
-5.14 Diabetes ML Risk Assessment (/predictions/diabetes)
+4.16 Multi-Disease Symptom Diagnostic Checker (/predictions/symptom-checker) [NEW]
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `GET /predictions/diabetes/metadata` (Public metadata and clinical ranges)
-  * `POST /predictions/diabetes` (Protected inference, requires JWT Bearer)
-- Biometric Form Inputs:
-  * `age` (Number, 0 to 120, float)
-  * `gender` (Enum: "Male" | "Female" | "Other")
-  * `hypertension` (Boolean toggle)
-  * `heart_disease` (Boolean toggle)
-  * `smoking_history` (Enum: "never" | "current" | "former" | "ever" | "not current" | "No Info")
-  * `bmi` (Number, 10.0 to 80.0, Body Mass Index with inline Height/Weight calculator helper)
-  * `hba1c_level` (Number, 3.0 to 20.0%, normal < 5.7%, prediabetes 5.7 - 6.4%, diabetic >= 6.5%)
-  * `blood_glucose_level` (Number, 30.0 to 600.0 mg/dL, normal fasting 70 - 99 mg/dL)
-  * `family_id` (Optional string UUID)
-  * `family_member_id` (Optional string UUID)
-  * `save_to_records` (Boolean toggle: persist assessment in prediction history)
-- Top Bar Actions:
-  * "Auto-Prefill Measurements" button: Calls `GET /predictions/prefill/{family_member_id}` to populate existing conditions and recent measurements.
-  * "Quick Preset" buttons:
-    - Healthy Preset: 26yo, Female, BMI 21.8, HbA1c 4.8, glucose 88, non-smoker.
-    - Borderline Preset: 48yo, Male, BMI 27.8, HbA1c 6.0, glucose 125, hypertension.
-    - High Risk Preset: 65yo, Male, BMI 34.0, HbA1c 8.2, glucose 195, heart disease, hypertension.
-- Results & Clinical Risk Panel:
-  * Risk Badge: `Low Risk` (Green) vs `High Risk` (Rose/Red)
-  * Risk Percentage Gauge (0.0% to 100.0%)
-  * Confidence Level Meter: `High Confidence`, `Moderate Confidence`, `Low Confidence (Borderline)`
-  * Biometric Feature Summary card reviewing input values
-  * Feature Attribution & Explainability Panel (detailed in 5.16)
-  * Dynamic, Rule-Based Clinical Recommendations list tailored to specific risk factors:
-    - HbA1c diabetic threshold alerts (>= 6.5%)
-    - Pre-diabetes dietary intervention advice (5.7% - 6.4%)
-    - Fasting glucose monitoring advice (>= 140 mg/dL)
-    - BMI nutritional & exercise guidance (Overweight >= 25, Obese >= 30)
-    - Cardiovascular dual lipid/glycemic coordination alerts
-    - Microvascular smoking cessation counseling
-  * Automated Emergency Alert: If saved to records and risk >= 75%, banner displays:
-    "Critical Risk Alert: An automated notification has been dispatched to family guardians."
+  * `GET /api/v1/predictions/symptoms` (Fetches 131 clinical symptom names)
+  * `GET /api/v1/predictions/diseases` (Fetches 41 disease descriptions & precautions)
+  * `POST /api/v1/predictions/symptom-checker` (Runs multiclass diagnostic inference)
+- UI Components:
+  * Searchable Tag Input / Multi-Select with autocomplete for 131 symptoms (e.g. "chills", "high_fever", "cough", "chest_pain").
+  * "Top Candidates" Selector: Slider or dropdown for `top_k` (default: 3, max: 10).
+  * Diagnostic Result Cards:
+    - Top Disease Match with Confidence Badge (e.g. "Malaria - 84.5% Confidence").
+    - Condition Clinical Overview (Summary description of the disease).
+    - 4-Step Structured Precautions (Bullet points with lifestyle and immediate care actions).
+    - Clinical Triage Alert: Red emergency banner if critical symptoms are detected (e.g., breathlessness, chest pain, coma).
+  * Disclaimer Banner: "This AI tool is for informational triage and does not replace medical diagnosis by a licensed doctor."
 
 --------------------------------------------------------------------------------
-5.15 Hypertension ML Risk Assessment (/predictions/hypertension)
+4.17 Feature Attribution & Patient Risk Drivers
+--------------------------------------------------------------------------------
+- Renders `feature_impacts` from prediction responses as an explainability bar chart:
+  * High Risk Driver (Red bar)
+  * Moderate Risk Driver (Amber bar)
+  * Protective Factor (Green bar)
+
+--------------------------------------------------------------------------------
+4.18 Longitudinal Risk Trends (/predictions/trends)
+--------------------------------------------------------------------------------
+- Endpoint: `GET /api/v1/predictions/trends/member/:memberId?prediction_type=DIABETES`
+- Renders:
+  * Trajectory Status Badge: `IMPROVING` (Green), `STABLE` (Blue), `WORSENING` (Red), `INSUFFICIENT_DATA`.
+  * Historical timeline line chart of assessment risk scores over time.
+  * Baseline Risk % vs Latest Risk % with Delta % calculation.
+
+--------------------------------------------------------------------------------
+4.19 One-Click Biometric Auto-Prefill
+--------------------------------------------------------------------------------
+- Endpoint: `GET /api/v1/predictions/prefill/member/:memberId`
+- Automatically inspects the member's chronic medical records and most recent physical vitals, auto-populating the ML assessment form in one click.
+
+--------------------------------------------------------------------------------
+4.20 Prediction History Management (/predictions/history)
 --------------------------------------------------------------------------------
 - Endpoints:
-  * `GET /predictions/hypertension/metadata` (Public metadata and feature definitions)
-  * `POST /predictions/hypertension` (Protected inference, requires JWT Bearer)
-- Biometric Form Inputs:
-  * `age` (Number, 0 to 120, float)
-  * `gender` (Enum: "Male" | "Female" | "Other")
-  * `heart_disease` (Boolean toggle: diagnosed cardiovascular pathology)
-  * `smoking_history` (Enum: "never" | "current" | "former" | "ever" | "not current" | "No Info")
-  * `bmi` (Number, 10.0 to 80.0, with inline BMI calculator)
-  * `hba1c_level` (Number, 3.0 to 20.0%)
-  * `blood_glucose_level` (Number, 30.0 to 600.0 mg/dL)
-  * `diabetes` (Boolean toggle: diagnosed diabetic comorbidity)
-  * `family_id` (Optional string UUID)
-  * `family_member_id` (Optional string UUID)
-  * `save_to_records` (Boolean toggle: persist assessment in prediction history)
-- Top Bar Actions:
-  * "Auto-Prefill Measurements" button: Calls `GET /predictions/prefill/{family_member_id}`.
-  * "Quick Preset" buttons:
-    - Healthy Young Adult: 24yo, Female, BMI 20.5, HbA1c 4.8, glucose 85, no diabetes.
-    - Middle-Aged Borderline: 52yo, Male, BMI 28.2, HbA1c 5.9, glucose 110, former smoker.
-    - Elderly High Risk: 72yo, Male, BMI 34.5, HbA1c 7.2, glucose 165, heart disease, diabetes.
-- Results & Clinical Risk Panel:
-  * Risk Badge: `Low Risk` (Green) vs `High Risk` (Rose/Red)
-  * Risk Percentage Gauge (0.0% to 100.0%)
-  * Confidence Level Meter: `High Confidence`, `Moderate Confidence`, `Low Confidence`
-  * Feature Attribution & Explainability Panel (detailed in 5.16)
-  * Dynamic Clinical Recommendations:
-    - Dietary DASH guidelines and daily sodium reduction (< 1500mg/day)
-    - Rest ambient home blood pressure cuff monitoring diary
-    - Aerobic exercise guidelines (150 mins/week moderate intensity)
-    - Cardiology & nephrology consultation alerts for elderly / diabetic patients
-  * Automated Emergency Alert: If saved to records and risk >= 70%, displays guardian alert banner.
+  * `GET /api/v1/predictions/history/member/:memberId`
+  * `DELETE /api/v1/predictions/history/:recordId`
+- Searchable, filterable table of past assessments with Export to PDF / CSV capability.
+
+===============================================================================
+5. COMPLETE BACKEND API ENDPOINTS & PAYLOAD REFERENCE
+===============================================================================
+
+Base URL: 
+  Local: `http://localhost:8000/api/v1`
+  Render Cloud: `https://<your-render-app-name>.onrender.com/api/v1`
+Header Requirement: `Authorization: Bearer <access_token>`
 
 --------------------------------------------------------------------------------
-5.16 Feature Attribution & Explainability Panel (Patient Risk Drivers)
+1. PROFILES (/profiles)
 --------------------------------------------------------------------------------
-- Returned in both Diabetes and Hypertension prediction responses (`feature_impacts: FeatureImpact[]`).
-- UI Presentation:
-  * Title: "Clinical Risk Drivers & Feature Attribution"
-  * Subtitle: "Local machine learning feature attribution explaining why this risk level was assigned."
-  * Grid / List of Feature Impact Cards:
-    - Feature Name & Display Label (e.g. "HbA1c Level", "Patient Age", "Body Mass Index")
-    - Patient Value Badge (e.g. "8.2%", "72 yrs", "34.5 kg/m2")
-    - Impact Level Badge:
-      * `HIGH_RISK_FACTOR` (Solid Red / Rose badge)
-      * `MODERATE_RISK_FACTOR` (Solid Amber / Orange badge)
-      * `PROTECTIVE_FACTOR` (Solid Emerald / Green badge)
-      * `NEUTRAL` (Slate badge)
-    - Relative Weight Progress Bar (0.0 to 1.0, representing model importance):
-      * Shows relative contribution to overall outcome.
-    - Clinical Description: Clear medical rationale explaining the pathological impact
-      (e.g., "Nicotine induces acute sympathetic vasoconstriction and accelerates arterial wall stiffness.").
+- GET /profiles/me
+  Response: ProfileResponse { id, full_name, date_of_birth, gender, phone_number, avatar_url, created_at, updated_at }
+- PUT /profiles/me
+  Payload: ProfileUpdate { full_name?, date_of_birth?, gender?, phone_number?, avatar_url? }
+- GET /profiles/{user_id}
 
 --------------------------------------------------------------------------------
-5.17 Longitudinal Risk Trends & Trajectory Analytics (/predictions/trends)
+2. FAMILIES & MEMBERS (/families)
 --------------------------------------------------------------------------------
-- Endpoint:
-  * `GET /predictions/trends?prediction_type={DIABETES|HYPERTENSION}&family_member_id={id}`
-- UI Layout:
-  * Disease Selector: Tabs or toggle for "Diabetes Trends" vs "Hypertension Trends".
-  * Family Member Filter: Dropdown to view trends for specific patient or current user.
-  * Trajectory Status Hero Banner:
-    - `IMPROVING` (Green banner with trending downward arrow):
-      "Favorable clinical improvement: Risk has decreased by X% since initial baseline."
-    - `WORSENING` (Red banner with trending upward arrow):
-      "Escalating risk trajectory: Risk has increased by X% since baseline. Clinical review recommended."
-    - `STABLE` (Blue/Cyan banner with horizontal indicator):
-      "Stable hemodynamic trajectory: Risk profile remains consistent within +/- 5% margin."
-    - `INSUFFICIENT_DATA` (Slate banner):
-      "At least 2 longitudinal assessments are required to calculate trajectory trend."
-  * Key Metric Stat Cards (4-column grid):
-    1. Baseline Risk: e.g. 88.0%
-    2. Latest Risk: e.g. 52.0%
-    3. Net Delta: e.g. -36.0% (colored green for negative, red for positive)
-    4. Total Assessments: e.g. 5 assessments
-  * Interactive Multi-Point Trend Chart (Recharts / Chart.js):
-    - X-Axis: Assessment dates (chronologically sorted).
-    - Y-Axis: Risk Percentage (0% to 100%).
-    - Trend Line: Smooth curve with data point dots that display a tooltip on hover
-      containing: Date, Risk Label, Confidence, and Key Biometrics (Glucose, HbA1c, BMI).
-    - Threshold Reference Lines:
-      * 50% High Risk threshold line (Dashed Red line).
-  * Clinical Summary Narrative Card: Render backend's `clinical_summary` text.
-  * Chronological Data Points Table: List of all historical assessment points with details.
+- POST /families
+  Payload: { "name": "Smith Family", "description": "Primary family group" }
+  Response 201: FamilyResponse { id, name, description, created_by, members: [...] }
+- GET /families
+  Response 200: FamilyResponse[]
+- GET /families/{family_id}
+  Response 200: FamilyResponse
+- POST /families/{family_id}/members
+  Payload: { "user_id": "<uuid>", "role": "MEMBER" | "GUARDIAN" | "ADMIN" }
+- DELETE /families/{family_id}/members/{user_id}
 
 --------------------------------------------------------------------------------
-5.18 One-Click Biometric Prefill from Clinical Records (/predictions/prefill)
+3. CONSENTS (/consents)
 --------------------------------------------------------------------------------
-- Endpoint:
-  * `GET /predictions/prefill/{family_member_id}`
-- User Experience:
-  * Placed at top of assessment form as a button: "⚡ Prefill from Health Records".
-  * On click: Fetches documented conditions and vitals.
-  * Auto-populates:
-    - Diagnosed conditions: `hypertension`, `heart_disease`, `diabetes` (from `health_records`).
-    - Physiological measurements: `bmi`, `age`, `gender`, `smoking_history`, `blood_glucose_level`, `hba1c_level` (from `prediction_history`).
-  * Displays informative toast with data origins (e.g. "Prefilled 6 fields from clinical records and past assessments.").
+- POST /consents
+  Payload: { "granter_id": "<uuid>", "grantee_id": "<uuid>", "family_id": "<uuid>", "permission_level": "READ_ONLY" | "FULL_ACCESS", "notes": "..." }
+- GET /consents
+- GET /consents/{consent_id}
+- PUT /consents/{consent_id}/status
+  Payload: { "status": "ACTIVE" | "REVOKED" | "DENIED" }
+- DELETE /consents/{consent_id}
 
 --------------------------------------------------------------------------------
-5.19 Unified ML Prediction History & Record Management (/predictions/history)
+4. HEALTH RECORDS (/health-records)
 --------------------------------------------------------------------------------
-- Endpoints:
-  * `GET /predictions/history?family_id={id}&family_member_id={id}&prediction_type={type}&limit=20&offset=0`
-  * `GET /predictions/history/{id}`
-  * `DELETE /predictions/history/{id}`
-- Features:
-  * Paginated assessment history log.
-  * Filter pills: All, Diabetes Only, Hypertension Only.
-  * Columns:
-    - Date & Time
-    - Subject (Self or Family Member name)
-    - Disease Type (`DIABETES` vs `HYPERTENSION`)
-    - Risk Outcome (Badge: Low Risk vs High Risk, Risk %)
-    - Confidence Tier
-    - Actions: "View Full Assessment" (Eye icon), "Delete Record" (Trash icon).
-  * Detail Modal / Drawer:
-    - Complete review of input biometric measurements.
-    - Full list of actionable recommendations given at that time.
-    - Model algorithm and version stamp (`RandomForestClassifier v1.0.0`).
-  * Delete Confirmation:
-    - Requires confirmation prompt with notice that deleting the record removes it from trend analytics.
+- POST /health-records
+  Payload: { "family_member_id": "<uuid>", "blood_type": "O+", "allergies": "Peanuts", "chronic_conditions": "Hypertension", "current_medications": "Amlodipine 5mg", "medical_history": "...", "vitals": {"bp": "120/80"}, "notes": "..." }
+- GET /health-records/member/{family_member_id}
+- GET /health-records/{record_id}
+- PUT /health-records/{record_id}
+- DELETE /health-records/{record_id}
+
+--------------------------------------------------------------------------------
+5. MEDICINES (/medicines)
+--------------------------------------------------------------------------------
+- POST /medicines
+  Payload: { "family_id": "<uuid>", "name": "Metformin", "dosage": "500mg", "dosage_form": "Tablet", "frequency": "Twice daily", "instructions": "Take with meals" }
+- GET /medicines/family/{family_id}
+- GET /medicines/{medicine_id}
+- PUT /medicines/{medicine_id}
+- DELETE /medicines/{medicine_id}
+
+--------------------------------------------------------------------------------
+6. MEDICINE SCHEDULES & LOGS (/medicine-schedules, /medicine-logs)
+--------------------------------------------------------------------------------
+- POST /medicine-schedules
+  Payload: { "medicine_id": "<uuid>", "family_member_id": "<uuid>", "dosage_time": "08:00", "days_of_week": ["MON", "WED", "FRI"], "start_date": "2026-10-01", "end_date": "2026-12-31" }
+- GET /medicine-schedules/member/{family_member_id}
+- PUT /medicine-schedules/{schedule_id}
+- DELETE /medicine-schedules/{schedule_id}
+- POST /medicine-logs
+  Payload: { "schedule_id": "<uuid>", "family_member_id": "<uuid>", "scheduled_time": "2026-10-10T08:00:00Z", "status": "TAKEN" | "MISSED" | "SKIPPED", "notes": "..." }
+- GET /medicine-logs/member/{family_member_id}
+
+--------------------------------------------------------------------------------
+7. EMERGENCY CONTACTS (/emergency-contacts)
+--------------------------------------------------------------------------------
+- POST /emergency-contacts
+  Payload: { "family_member_id": "<uuid>", "name": "Jane Doe", "relationship": "Spouse", "phone_number": "+1234567890", "priority": 1, "notification_preferences": {"sms": true, "call": true} }
+- GET /emergency-contacts/member/{family_member_id}
+- PUT /emergency-contacts/{contact_id}
+- DELETE /emergency-contacts/{contact_id}
+
+--------------------------------------------------------------------------------
+8. EMERGENCY SOS (/emergency-sos)
+--------------------------------------------------------------------------------
+- POST /emergency-sos
+  Payload: { "family_id": "<uuid>", "message": "Severe chest pain", "latitude": 37.7749, "longitude": -122.4194, "address": "Market St, San Francisco", "battery_percentage": 82 }
+- GET /emergency-sos/family/{family_id}
+- PUT /emergency-sos/{sos_id}/resolve
+  Payload: { "resolution_notes": "Ambulance arrived, patient stable" }
+
+--------------------------------------------------------------------------------
+9. MEDICAL REPORTS (/medical-reports)
+--------------------------------------------------------------------------------
+- POST /medical-reports
+  Multipart Form-Data: file (binary), family_member_id, report_type, title, doctor_name, hospital_clinic, report_date, notes
+- GET /medical-reports/member/{family_member_id}
+- GET /medical-reports/{report_id}/download-url
+  Response: { "download_url": "https://...signed-supabase-url...", "expires_in": 300 }
+- DELETE /medical-reports/{report_id}
+
+--------------------------------------------------------------------------------
+10. NOTIFICATIONS (/notifications)
+--------------------------------------------------------------------------------
+- GET /notifications?unread_only=true
+- PUT /notifications/{id}/read
+- PUT /notifications/read-all
+
+--------------------------------------------------------------------------------
+11. ML PREDICTIONS & SYMPTOM CHECKER (/predictions)
+--------------------------------------------------------------------------------
+- GET /predictions/diabetes/metadata
+- POST /predictions/diabetes
+  Payload: {
+    "age": 55, "gender": "Male", "hypertension": true, "heart_disease": false,
+    "smoking_history": "former", "bmi": 28.5, "hba1c_level": 6.8, "blood_glucose_level": 145.0,
+    "family_id": "<uuid>", "family_member_id": "<uuid>", "save_to_records": true
+  }
+- GET /predictions/hypertension/metadata
+- POST /predictions/hypertension
+  Payload: {
+    "age": 60, "gender": "Female", "heart_disease": true, "smoking_history": "never",
+    "bmi": 29.0, "hba1c_level": 5.8, "blood_glucose_level": 110.0, "diabetes": false,
+    "family_id": "<uuid>", "family_member_id": "<uuid>", "save_to_records": true
+  }
+- GET /predictions/symptoms [NEW]
+  Response: { "total_symptoms": 131, "symptoms": ["chills", "high_fever", "cough", "chest_pain", ...] }
+- GET /predictions/diseases [NEW]
+  Response: { "total_diseases": 41, "diseases": { "Malaria": { "description": "...", "precautions": [...] } } }
+- POST /predictions/symptom-checker [NEW]
+  Payload: { "symptoms": ["chills", "high_fever", "sweating", "headache"], "top_k": 3 }
+  Response 200: {
+    "top_disease": "Malaria",
+    "confidence_percent": 84.5,
+    "matched_symptoms": ["chills", "high_fever", "sweating", "headache"],
+    "unrecognized_symptoms": [],
+    "top_predictions": [
+      {
+        "disease": "Malaria",
+        "confidence_percent": 84.5,
+        "description": "An infectious disease caused by protozoan parasites...",
+        "precautions": ["Consult nearest clinic", "Avoid mosquito bites", "Keep surroundings clean", "Use mosquito net"]
+      }
+    ],
+    "emergency_recommendation": "Please review these findings with a licensed healthcare provider."
+  }
+- GET /predictions/history/member/{family_member_id}
+- GET /predictions/trends/member/{family_member_id}?prediction_type=DIABETES
+- GET /predictions/prefill/member/{family_member_id}
+- DELETE /predictions/history/{record_id}
 
 ================================================================================
-6. COMPLETE BACKEND API ENDPOINTS REFERENCE & CONTRACTS (42+ ROUTES)
-================================================================================
-Base URL: `http://127.0.0.1:8000/api/v1` (Local) or Render Cloud URL
-Header Required on all authenticated endpoints:
-  `Authorization: Bearer <supabase_jwt_token>`
-
-------------------------------------------------------------------------------------------------------------------------
-METHOD | ENDPOINT                                       | DESCRIPTION                        | PAYLOAD / QUERY PARAMS
--------+------------------------------------------------+------------------------------------+--------------------------
-GET    | /health                                        | Backend Health & DB Status         | None (Public)
-GET    | /profiles/me                                   | Current User Profile               | None
-PUT    | /profiles/me                                   | Update User Profile                | { full_name?, avatar_url? }
-POST   | /families                                      | Create Family Workspace            | { name }
-GET    | /families                                      | List User Families                 | None
-GET    | /families/{id}                                 | Get Family & Member Roster         | None
-POST   | /families/{id}/members                         | Add Member to Family (ADMIN)       | { user_id, role: "ADMIN"|"MEMBER" }
-DELETE | /families/{id}/members/{user_id}               | Remove Member from Family          | None
-POST   | /consents                                      | Grant Access Consent               | { grantee_id, family_id, permission_level }
-GET    | /consents                                      | List User Consents                 | None
-PATCH  | /consents/{id}                                 | Update / Revoke Consent            | { status?, permission_level? }
-POST   | /health-records                                | Create Patient Health Record       | { family_member_id, blood_group?, allergies?, chronic_conditions?, medical_history?, emergency_notes? }
-GET    | /health-records                                | List Health Records                | Query: family_member_id?
-GET    | /health-records/{id}                           | Get Health Record Details          | None
-PUT    | /health-records/{id}                           | Update Health Record               | Partial HealthRecord fields
-DELETE | /health-records/{id}                           | Delete Health Record               | None
-POST   | /medicines                                     | Add Prescribed Medicine            | { family_member_id, medicine_name, dosage, frequency, instructions?, start_date?, end_date?, is_active? }
-GET    | /medicines                                     | List Medicines                     | Query: family_member_id?, is_active?
-GET    | /medicines/{id}                                | Get Medicine Details               | None
-PUT    | /medicines/{id}                                | Update Medicine                    | Partial Medicine fields
-DELETE | /medicines/{id}                                | Delete Medicine                    | None
-POST   | /medicine-schedules                           | Create Dose Schedule               | { medicine_id, scheduled_time, day_of_week?, dose_quantity?, reminder_enabled? }
-GET    | /medicine-schedules                           | List Schedules for Medicine        | Query: medicine_id?
-GET    | /medicine-schedules/{id}                       | Get Schedule Details               | None
-PUT    | /medicine-schedules/{id}                       | Update Schedule                    | Partial MedicineSchedule fields
-DELETE | /medicine-schedules/{id}                       | Delete Schedule                    | None
-POST   | /medicine-logs                                 | Log Dose Intake (Taken/Missed)     | { medicine_id, schedule_id?, status, taken_at?, notes? }
-GET    | /medicine-logs                                 | List Medicine Logs                 | Query: medicine_id?, family_member_id?, start_date?, end_date?
-GET    | /medicine-logs/{id}                            | Get Log Entry                      | None
-PATCH  | /medicine-logs/{id}                            | Update Log Status/Notes            | { status, notes? }
-DELETE | /medicine-logs/{id}                            | Delete Log Entry                   | None
-POST   | /emergency-contacts                            | Add Emergency Contact              | { family_member_id, name, relationship?, phone, email?, priority, is_active }
-GET    | /emergency-contacts                            | List Emergency Contacts            | Query: family_member_id?
-GET    | /emergency-contacts/{id}                       | Get Contact Details                | None
-PUT    | /emergency-contacts/{id}                       | Update Contact                     | Partial EmergencyContact fields
-DELETE | /emergency-contacts/{id}                       | Delete Contact                     | None
-POST   | /emergency/sos                                 | Trigger Emergency SOS Broadcast    | { family_member_id, latitude?, longitude?, accuracy?, timestamp?, notes? }
-GET    | /emergency/sos/history                         | List SOS Incidents                 | Query: family_member_id?, status?, start_date?, end_date?, limit?, offset?
-GET    | /emergency/sos/{id}                            | Get SOS Incident Details           | None
-PATCH  | /emergency/sos/{id}/status                     | Acknowledge / Resolve Incident     | { status: "ACKNOWLEDGED"|"RESOLVED"|"CANCELLED", notes? }
-POST   | /medical-reports                               | Upload Medical Document            | FormData: file, family_member_id, report_type?, report_date?, description?
-GET    | /medical-reports                               | List Medical Reports               | Query: family_member_id?, report_type?
-GET    | /medical-reports/{id}                          | Get Report Signed Download URL     | None (Returns 5-min signed URL)
-DELETE | /medical-reports/{id}                          | Delete Medical Report              | None
-GET    | /notifications                                 | List Notifications                 | Query: status?, type?, limit?, offset?
-PATCH  | /notifications/{id}/read                       | Mark Notification as Read          | None
-GET    | /audit-logs                                    | List Immutable Audit Trail         | Query: family_id?, family_member_id?, action?, resource_type?, limit?, offset?
-GET    | /predictions/diabetes/metadata                 | Diabetes ML Metadata & Ranges      | None (Public)
-POST   | /predictions/diabetes                          | Run Diabetes Risk Inference        | DiabetesPredictionRequest
-GET    | /predictions/hypertension/metadata             | Hypertension ML Metadata & Ranges  | None (Public)
-POST   | /predictions/hypertension                      | Run Hypertension Risk Inference    | HypertensionPredictionRequest
-GET    | /predictions/trends                            | Longitudinal Trajectory Analytics  | Query: prediction_type? (DIABETES/HYPERTENSION), family_member_id?
-GET    | /predictions/prefill/{family_member_id}        | Prefill Biometrics from Records    | None
-GET    | /predictions/history                           | List Assessment History            | Query: family_id?, family_member_id?, prediction_type?, limit?, offset?
-GET    | /predictions/history/{record_id}               | Get Assessment History Record      | None
-DELETE | /predictions/history/{record_id}               | Delete Assessment History Record   | None
-------------------------------------------------------------------------------------------------------------------------
-
-================================================================================
-7. FULL TYPESCRIPT DATA MODELS & INTERFACES (STRICT TYPES)
+6. FULL TYPESCRIPT DATA MODELS & INTERFACES (STRICT TYPES)
 ================================================================================
 
 ```typescript
-// ============================================================================
-// 1. Core Auth & User Profile
-// ============================================================================
-export interface Profile {
+// --- Auth & User ---
+export interface UserProfile {
   id: string;
   full_name: string;
-  avatar_url?: string;
+  date_of_birth: string | null;
+  gender: string | null;
+  phone_number: string | null;
+  avatar_url: string | null;
   created_at: string;
-  updated_at?: string;
+  updated_at: string;
 }
 
-// ============================================================================
-// 2. Family & RBAC
-// ============================================================================
-export type FamilyRole = 'ADMIN' | 'MEMBER';
-
-export interface Family {
-  id: string;
-  name: string;
-  created_by: string;
-  created_at: string;
-}
+// --- Families & Members ---
+export type FamilyRole = 'ADMIN' | 'GUARDIAN' | 'MEMBER';
 
 export interface FamilyMember {
   id: string;
@@ -592,436 +518,159 @@ export interface FamilyMember {
   user_id: string;
   role: FamilyRole;
   joined_at: string;
-  user_profile?: Profile;
+  profile?: UserProfile;
 }
 
-// ============================================================================
-// 3. Consents
-// ============================================================================
-export type PermissionLevel = 'READ_ONLY' | 'FULL_ACCESS';
-export type ConsentStatus = 'ACTIVE' | 'REVOKED' | 'EXPIRED';
+export interface Family {
+  id: string;
+  name: string;
+  description: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  members: FamilyMember[];
+}
+
+// --- Consents ---
+export type ConsentPermission = 'READ_ONLY' | 'FULL_ACCESS';
+export type ConsentStatus = 'PENDING' | 'ACTIVE' | 'REVOKED' | 'DENIED';
 
 export interface Consent {
   id: string;
-  grantor_id: string;
+  granter_id: string;
   grantee_id: string;
   family_id: string;
-  permission_level: PermissionLevel;
+  permission_level: ConsentPermission;
   status: ConsentStatus;
+  notes: string | null;
   created_at: string;
-  updated_at?: string;
+  updated_at: string;
 }
 
-// ============================================================================
-// 4. Health Records
-// ============================================================================
-export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
-
-export interface HealthRecord {
-  id: string;
-  family_member_id: string;
-  blood_group?: BloodGroup;
-  allergies?: string;
-  chronic_conditions?: string;
-  medical_history?: string;
-  emergency_notes?: string;
-  created_at: string;
-  updated_at?: string;
-}
-
-// ============================================================================
-// 5. Medicines & Schedules
-// ============================================================================
-export interface Medicine {
-  id: string;
-  family_member_id: string;
-  medicine_name: string;
-  dosage: string;
-  frequency: string;
-  instructions?: string;
-  start_date?: string;
-  end_date?: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at?: string;
-}
-
-export interface MedicineSchedule {
-  id: string;
-  medicine_id: string;
-  scheduled_time: string; // "HH:MM:SS" or "HH:MM"
-  day_of_week?: number;   // 0 = Sunday, 6 = Saturday
-  dose_quantity: number;
-  reminder_enabled: boolean;
-  created_at: string;
-}
-
-export type MedicineLogStatus = 'TAKEN' | 'MISSED' | 'SKIPPED';
-
-export interface MedicineLog {
-  id: string;
-  medicine_id: string;
-  schedule_id?: string;
-  status: MedicineLogStatus;
-  taken_at: string;
-  notes?: string;
-  created_at: string;
-}
-
-// ============================================================================
-// 6. Emergency Contacts & SOS
-// ============================================================================
-export interface EmergencyContact {
-  id: string;
-  family_member_id: string;
-  name: string;
-  relationship?: string;
-  phone: string;
-  email?: string;
-  priority: number; // 1 = highest
-  is_active: boolean;
-  created_at: string;
-}
-
-export type SOSStatus = 'TRIGGERED' | 'ACKNOWLEDGED' | 'RESOLVED' | 'CANCELLED';
-
-export interface EmergencySOSEvent {
-  id: string;
-  family_member_id: string;
-  user_id: string;
-  status: SOSStatus;
-  latitude?: number;
-  longitude?: number;
-  accuracy?: number;
-  notes?: string;
-  created_at: string;
-  updated_at?: string;
-}
-
-// ============================================================================
-// 7. Medical Reports
-// ============================================================================
-export type ReportType = 'LAB_REPORT' | 'PRESCRIPTION' | 'DISCHARGE_SUMMARY' | 'IMAGING_SCAN' | 'OTHER';
-
-export interface MedicalReport {
-  id: string;
-  family_member_id: string;
-  uploaded_by: string;
-  file_name: string;
-  file_size_bytes: number;
-  mime_type: string;
-  report_type: ReportType;
-  report_date?: string;
-  description?: string;
-  created_at: string;
-}
-
-export interface MedicalReportDownloadResponse {
-  id: string;
-  file_name: string;
-  download_url: string; // 5-minute signed URL
-  expires_in_seconds: number;
-}
-
-// ============================================================================
-// 8. Notifications
-// ============================================================================
-export type NotificationType = 'MEDICINE_REMINDER' | 'EMERGENCY_SOS';
-export type NotificationStatus = 'PENDING' | 'SENT' | 'FAILED' | 'READ';
-
-export interface Notification {
-  id: string;
-  user_id: string;
-  family_member_id: string;
-  type: NotificationType;
-  title: string;
-  message: string;
-  status: NotificationStatus;
-  scheduled_at?: string;
-  sent_at?: string;
-  read_at?: string;
-  created_at: string;
-}
-
-// ============================================================================
-// 9. Audit Logs
-// ============================================================================
-export interface AuditLog {
-  id: string;
-  actor_user_id: string;
-  family_id?: string;
-  family_member_id?: string;
-  action: string;
-  resource_type: string;
-  resource_id?: string;
-  metadata: Record<string, any>;
-  created_at: string;
-}
-
-// ============================================================================
-// 10. Machine Learning - Enums & Feature Explainability
-// ============================================================================
-export type GenderType = 'Male' | 'Female' | 'Other';
-export type SmokingHistoryType = 'never' | 'current' | 'former' | 'ever' | 'not current' | 'No Info';
-export type FeatureImpactLevel = 'HIGH_RISK_FACTOR' | 'MODERATE_RISK_FACTOR' | 'PROTECTIVE_FACTOR' | 'NEUTRAL';
-
+// --- ML Predictions & Symptoms ---
 export interface FeatureImpact {
-  feature: string;           // Technical feature identifier (e.g. 'HbA1c_level', 'age')
-  display_name: string;      // Human-friendly title (e.g. 'Hemoglobin A1c', 'Patient Age')
-  value: any;                // Patient's recorded measurement value
-  impact_level: FeatureImpactLevel;
-  relative_weight: number;   // Model importance weight scalar (0.0 to 1.0)
-  description: string;       // Clinical explanation of pathological mechanism
-}
-
-// ============================================================================
-// 11. Machine Learning - Diabetes Prediction
-// ============================================================================
-export interface DiabetesPredictionRequest {
-  age: number;               // 0 to 120
-  gender: GenderType;
-  hypertension: boolean;
-  heart_disease: boolean;
-  smoking_history: SmokingHistoryType;
-  bmi: number;               // 10.0 to 80.0
-  hba1c_level: number;       // 3.0 to 20.0
-  blood_glucose_level: number; // 30.0 to 600.0
-  family_id?: string;
-  family_member_id?: string;
-  save_to_records?: boolean;
+  feature_name: string;
+  feature_value: string;
+  impact_direction: 'HIGH_RISK_FACTOR' | 'MODERATE_RISK_FACTOR' | 'PROTECTIVE_FACTOR';
+  importance_score: number;
+  clinical_explanation: string;
 }
 
 export interface DiabetesPredictionResponse {
-  prediction: number;        // 0 = Low Risk, 1 = High Risk
+  prediction: number;
   risk_label: 'Low Risk' | 'High Risk';
-  risk_probability: number;  // 0.0 to 1.0
-  risk_percentage: number;   // 0.0 to 100.0
-  confidence_level: 'High Confidence' | 'Moderate Confidence' | 'Low Confidence (Borderline)';
-  feature_summary: {
-    age: number;
-    gender: string;
-    bmi: number;
-    hba1c_level: number;
-    blood_glucose_level: number;
-    hypertension: boolean;
-    heart_disease: boolean;
-    smoking_history: string;
-  };
-  recommendations: string[];
-  feature_impacts: FeatureImpact[];
-  assessed_at: string;
-  record_id?: string;
-}
-
-// ============================================================================
-// 12. Machine Learning - Hypertension Prediction
-// ============================================================================
-export interface HypertensionPredictionRequest {
-  age: number;               // 0 to 120
-  gender: GenderType;
-  heart_disease: boolean;
-  smoking_history: SmokingHistoryType;
-  bmi: number;               // 10.0 to 80.0
-  hba1c_level: number;       // 3.0 to 20.0
-  blood_glucose_level: number; // 30.0 to 600.0
-  diabetes: boolean;
-  family_id?: string;
-  family_member_id?: string;
-  save_to_records?: boolean;
-}
-
-export interface HypertensionPredictionResponse {
-  prediction: number;        // 0 = Low Risk, 1 = High Risk
-  risk_label: 'Low Risk' | 'High Risk';
-  risk_probability: number;  // 0.0 to 1.0
-  risk_percentage: number;   // 0.0 to 100.0
-  confidence_level: 'High Confidence' | 'Moderate Confidence' | 'Low Confidence (Borderline)';
-  feature_summary: {
-    age: number;
-    gender: string;
-    bmi: number;
-    hba1c_level: number;
-    blood_glucose_level: number;
-    heart_disease: boolean;
-    diabetes: boolean;
-    smoking_history: string;
-  };
-  recommendations: string[];
-  feature_impacts: FeatureImpact[];
-  assessed_at: string;
-  record_id?: string;
-}
-
-// ============================================================================
-// 13. Machine Learning - Longitudinal Trends & Trajectory
-// ============================================================================
-export type TrajectoryType = 'IMPROVING' | 'WORSENING' | 'STABLE' | 'INSUFFICIENT_DATA';
-
-export interface TrendDataPoint {
-  record_id: string;
-  assessed_at: string;
-  prediction_type: 'DIABETES' | 'HYPERTENSION';
-  risk_label: 'Low Risk' | 'High Risk';
-  risk_percentage: number;
   risk_probability: number;
-  confidence_level: string;
-  key_metrics: Record<string, any>;
+  risk_percentage: number;
+  confidence_level: 'High Confidence' | 'Moderate Confidence' | 'Low Confidence';
+  feature_summary: Record<string, any>;
+  recommendations: string[];
+  feature_impacts: FeatureImpact[];
+  assessed_at: string;
+  record_id?: string;
+}
+
+export interface SymptomPredictionItem {
+  disease: string;
+  confidence_percent: number;
+  description: string;
+  precautions: string[];
+}
+
+export interface SymptomCheckerRequest {
+  symptoms: string[];
+  top_k?: number;
+}
+
+export interface SymptomCheckerResponse {
+  top_disease: string;
+  confidence_percent: number;
+  matched_symptoms: string[];
+  unrecognized_symptoms: string[];
+  top_predictions: SymptomPredictionItem[];
+  emergency_recommendation: string;
 }
 
 export interface PredictionTrendsResponse {
   total_assessments: number;
   prediction_type: string;
-  trajectory: TrajectoryType;
-  latest_risk_percentage?: number;
-  baseline_risk_percentage?: number;
-  delta_percentage?: number;
-  average_risk_percentage?: number;
+  trajectory: 'IMPROVING' | 'WORSENING' | 'STABLE' | 'INSUFFICIENT_DATA';
+  latest_risk_percentage: number | null;
+  baseline_risk_percentage: number | null;
+  delta_percentage: number | null;
+  average_risk_percentage: number | null;
   clinical_summary: string;
-  data_points: TrendDataPoint[];
+  data_points: {
+    record_id: string;
+    assessed_at: string;
+    prediction_type: string;
+    risk_label: string;
+    risk_percentage: number;
+    risk_probability: number;
+    confidence_level: string;
+    key_metrics: Record<string, any>;
+  }[];
 }
 
-// ============================================================================
-// 14. Machine Learning - Biometric Prefill
-// ============================================================================
-export interface PrefillPredictionResponse {
-  family_member_id: string;
-  age?: number;
-  gender?: string;
-  bmi?: number;
-  hypertension?: boolean;
-  heart_disease?: boolean;
-  diabetes?: boolean;
-  smoking_history?: string;
-  hba1c_level?: number;
-  blood_glucose_level?: number;
-  source_notes: string[];
-}
-
-// ============================================================================
-// 15. Machine Learning - History Item & Metadata
-// ============================================================================
-export interface PredictionHistoryItem {
+// --- Emergency SOS ---
+export interface EmergencySOS {
   id: string;
-  user_id: string;
-  family_id?: string;
-  family_member_id?: string;
-  prediction_type: 'DIABETES' | 'HYPERTENSION';
-  model_version: string;
-  model_name: string;
-  input_measurements: Record<string, any>;
-  prediction_result: number;
-  risk_label: 'Low Risk' | 'High Risk';
-  risk_probability: number;
-  risk_percentage: number;
-  confidence_level: string;
-  recommendations: string[];
+  family_id: string;
+  triggered_by: string;
+  message: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  address: string | null;
+  battery_percentage: number | null;
+  status: 'ACTIVE' | 'RESOLVED';
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_notes: string | null;
   created_at: string;
 }
-
-export interface ModelMetadataResponse {
-  model_name: string;
-  disease_target: string;
-  model_version: string;
-  features_count: number;
-  expected_features: string[];
-  feature_details: Record<string, any>;
-  regulatory_disclaimer: string;
-}
 ```
 
 ================================================================================
-8. FRONTEND SECURITY, VALIDATION & ERROR HANDLING
+7. ENVIRONMENT CONFIGURATION (.env)
 ================================================================================
-1. Client-Side Input Validation (Pre-Flight Checks):
-   - Numerical Biometrics:
-     * Age: 0 to 120 years
-     * BMI: 10.0 to 80.0 kg/m2
-     * HbA1c: 3.0% to 20.0%
-     * Blood Glucose: 30.0 to 600.0 mg/dL
-   - Blood Group: Must strictly match one of the 8 allowed values.
-   - Phone Number: Validate using regex `/^\+?[0-9]{5,20}$/`.
-   - File Uploads: Reject files > 15MB or not matching PDF/PNG/JPG before upload.
-   - Coordinates: If latitude is provided, longitude is required (-90 to 90, -180 to 180).
-2. Authorization Token Sanitization:
-   - Forward Supabase JWT strictly in the `Authorization: Bearer <token>` HTTP header.
-   - Never pass tokens, passwords, or hashes in URL query parameters or request bodies.
-3. HTTP Status Code Handling:
-   - 400 Bad Request: Display validation error message from `detail`.
-   - 401 Unauthorized: Redirect to `/login`, clear cached user session.
-   - 403 Forbidden: Display friendly warning toast (e.g. "Active FULL_ACCESS consent required for this action").
-   - 404 Not Found: Display resource missing empty state.
-   - 422 Unprocessable Entity: Parse FastAPI validation errors array `{ loc, msg, type }` into form field errors.
-   - 503 Service Unavailable: Model artifact unavailable. Render graceful error banner:
-     "Predictive AI service is currently initializing. Please retry in a moment."
-
-================================================================================
-9. ENVIRONMENT CONFIGURATION (.env)
-================================================================================
-Create `.env` in your frontend project root (`frontend/.env`):
+Frontend `.env` configuration template:
 
 ```env
-# Application Configuration
-VITE_APP_NAME="Family Health Guardian"
+# Supabase Client Configuration
+VITE_SUPABASE_URL=https://utfdzsucfgsvocoviroa.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZmR6c3VjZmdzdm9jb3Zpcm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMDY5MDcsImV4cCI6MjEwNjc4MjkwN30.C39V15zL8Z785ZomE1iC7xV1z7mI8GjT9bF_398eTQE
 
-# Production Backend (Render Cloud):
-VITE_API_BASE_URL="https://family-health-guardian-backend.onrender.com/api/v1"
-VITE_SWAGGER_URL="https://family-health-guardian-backend.onrender.com/docs"
-VITE_OPENAPI_URL="https://family-health-guardian-backend.onrender.com/api/v1/openapi.json"
-
-# Local Development Alternative:
-# VITE_API_BASE_URL="http://127.0.0.1:8000/api/v1"
-# VITE_SWAGGER_URL="http://127.0.0.1:8000/docs"
-# VITE_OPENAPI_URL="http://127.0.0.1:8000/api/v1/openapi.json"
-
-# Supabase Authentication & Database Bindings
-VITE_SUPABASE_URL="https://utfdzsucfgsvocoviroa.supabase.co"
-VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV0ZmR6c3VjZmdzdm9jb3Zpcm9hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMDY5MDcsImV4cCI6MjEwNjc4MjkwN30.h_Pqzlz8yzJWqEeOJYmktwWtijWfa9Ah61E1mFwMBQE"
+# Backend API Base URL
+# Use localhost for local dev, or your live Render backend URL for production
+VITE_API_BASE_URL=http://localhost:8000/api/v1
+# VITE_API_BASE_URL=https://<your-render-app>.onrender.com/api/v1
 ```
 
 ================================================================================
-10. STEP-BY-STEP IMPLEMENTATION ROADMAP
+8. STEP-BY-STEP IMPLEMENTATION ROADMAP FOR FRONTEND DEVELOPERS
 ================================================================================
-Phase 1: Foundation & Auth
-  [x] Initialize React 19 + TypeScript + Vite project.
-  [x] Set up Supabase client and AuthContext.
-  [x] Implement Axios client with Bearer token interceptor.
-  [x] Create Login, Registration, and Profile settings pages.
+Phase 1: Foundation & Auth Setup
+  - Initialize Supabase Client (`@supabase/supabase-js`) with `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+  - Create Axios instance with Request Interceptor that automatically retrieves active Supabase session JWT and attaches `Authorization: Bearer ${token}`.
+  - Implement `/login` and `/register` pages.
 
-Phase 2: Families & Consents
-  [x] Implement Family Switcher and Family Workspace view.
-  [x] Build member list and Add Member modal (ADMIN only).
-  [x] Build Consent Hub with "Granted by Me" and "Granted to Me" tabs.
+Phase 2: Family Hub & Navigation Layout
+  - Implement top navigation bar with Family Switcher Dropdown and Notification Bell.
+  - Build `/families` management screen (create family, list members, add member).
+  - Implement `/profile` screen for editing user vitals & phone number.
 
-Phase 3: Core Health Features
-  [x] Build Health Records summary view and edit modal.
-  [x] Build Medicines catalog and active/past filters.
-  [x] Build Medicine Schedules & Daily Intake Log timeline.
-  [x] Implement Medical Reports drag-and-drop uploader with signed-URL viewer.
+Phase 3: Core Health Management
+  - Build `/health-records` form and overview cards.
+  - Build `/medicines` and `/medicine-schedules` timeline view with quick "Take/Skip" buttons.
+  - Build `/medical-reports` drag-and-drop uploader and signed URL viewer.
 
-Phase 4: Emergency System & Real-Time Alerts
-  [x] Build Emergency Contacts roster with priority rank ordering.
-  [x] Implement Floating SOS button with 3-second hold and Geolocation API.
-  [x] Implement active SOS incident modal with Leaflet / Mapbox GPS map.
-  [x] Build SOS incident history table with date/status filters.
+Phase 4: Emergency SOS & Guardian Triage
+  - Implement pulsating 3-second hold SOS Button with geolocation capture.
+  - Build Emergency Contacts Priority Roster.
+  - Implement real-time or polled Notification alerts banner.
 
-Phase 5: Notifications, Audit & Polish
-  [x] Build Notification Center feed with unread count and mark-as-read.
-  [x] Build Audit Trail table for admins and guardians.
-  [x] Test complete user journey end-to-end against FastAPI backend.
-
-Phase 6: Diabetes ML Prediction & Risk Assessment
-  [x] Build Diabetes Risk Assessment page (/predictions/diabetes) with biometric inputs.
-  [x] Implement inline BMI calculator (Height/Weight to BMI conversion).
-  [x] Provide demonstration presets (Healthy, Borderline, High Risk).
-  [x] Render dynamic risk probability gauge and confidence meter.
-
-Phase 7: Advanced Clinical AI & Explainability Suite (Latest Backend Release)
-  [x] Build Hypertension Risk Assessment page (/predictions/hypertension).
-  [x] Implement Clinical Explainability Panel rendering `feature_impacts` cards and relative weight bars.
-  [x] Implement "⚡ Auto-Prefill Measurements" button calling `/predictions/prefill/{family_member_id}`.
-  [x] Build Longitudinal Risk Trends page (/predictions/trends) with Trajectory Hero banner & interactive charts.
-  [x] Build Unified Prediction History log (/predictions/history) with detail inspection modal & deletion.
-  [x] Implement Automated Critical-Risk SOS notification alerts on high risk assessments (>= 75% diabetes, >= 70% hypertension).
-================================================================================
-                        END OF FRONTEND REQUIREMENTS
+Phase 5: Machine Learning & Diagnostic Suite
+  - Build Diabetes Assessment form with "Auto-Prefill" button and Risk Gauge visualization.
+  - Build Hypertension Assessment form with explainability driver bars.
+  - Build Multi-Disease Symptom Checker with searchable symptom tags, probability match cards, and 4-step clinical precautions.
+  - Build Longitudinal Trends chart showing health trajectory over time.
 ================================================================================
